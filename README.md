@@ -51,7 +51,12 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
 
 The managed servers themselves need nothing installed except an SSH server.
 The optional monitoring agent is plain POSIX `sh` and works on any mainstream
-distro (systemd or cron).
+distro (systemd or cron). Server Deck is intentionally light — both the panel
+and the agent are comfortable on tiny 1 vCPU / 1 GB machines.
+
+**Tested so far:** panel host on Fedora 44 and Ubuntu 22.04+ (Docker Compose
+deployment), managing Ubuntu and Oracle Linux servers. Other distros should
+work the same — reports welcome via issues.
 
 ## Quick start (Docker, any distro)
 
