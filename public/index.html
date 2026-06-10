@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Server Deck</title>
+    <meta name="color-scheme" content="dark">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/vendor/xterm.css">
+    <link rel="stylesheet" href="/styles.css">
+    <script>
+      try {
+        var savedTheme = localStorage.getItem("serverDeck.theme");
+        if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+        var savedAccent = localStorage.getItem("serverDeck.accent");
+        if (savedAccent) document.documentElement.dataset.accent = savedAccent;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="feature-nav">
+        <div class="nav-brand">
+          <div class="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">Server Deck</span>
+            <span class="brand-tag">Control panel</span>
+          </div>
+        </div>
+        <nav id="opsTabs" class="sidebar-tabs"></nav>
+      </aside>
+
+      <aside id="serverRail" class="server-rail">
+        <div class="rail-header">
+          <div class="rail-title-group">
+            <span class="rail-title">Servers</span>
+            <span id="railCount" class="rail-count"></span>
+          </div>
+          <div class="rail-actions">
+            <button class="icon-button" id="newServerButton" title="Create" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <div id="createMenu" class="create-menu" role="menu" hidden>
+              <button id="newServerMenuButton" type="button" role="menuitem">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                New server
+              </button>
+              <button id="newGroupMenuButton" type="button" role="menuitem">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                New group
+              </button>
+            </div>
+            <button class="rail-toggle" id="collapseServerRailButton" title="Collapse server list">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="serverSearch" class="search" type="search" placeholder="Search servers…">
+        </div>
+        <div id="groupCreate" class="group-create" hidden>
+          <input id="groupNameInput" autocomplete="off" maxlength="48" placeholder="Group name">
+          <button id="createGroupButton" class="secondary-button" type="button">Add</button>
+        </div>
+        <div id="serverList" class="server-list"></div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-titles">
+            <div id="selectedTitle" class="selected-title">No server selected</div>
+            <div id="selectedMeta" class="selected-meta">Pick a server from the server list.</div>
+          </div>
+          <div class="toolbar">
+            <button id="openTerminalButton" class="secondary-button with-icon" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+              Terminal
+            </button>
+          </div>
+        </header>
+
+        <section class="workspace">
+          <section id="contentPane" class="content-pane"></section>
+
+          <section id="settingsPanel" class="settings-panel" hidden>
+            <div class="operation-header">
+              <div>
+                <h1>Settings</h1>
+                <p id="settingsMeta">Select a server to edit its connection details.</p>
+              </div>
+              <div class="settings-header-actions">
+                <button id="saveServerButton" class="primary-button" type="button" disabled>Save changes</button>
+                <button id="deleteServerButton" class="danger-button" type="button" disabled>Delete server</button>
+              </div>
+            </div>
+            <form id="serverForm" class="server-form">
+              <section class="form-card">
+                <h2 class="form-card-title">Connection</h2>
+                <div class="form-grid">
+                  <label>
+                    <span>Name</span>
+                    <input id="serverName" autocomplete="off" placeholder="My web server">
+                  </label>
+                  <label>
+                    <span>Host</span>
+                    <input id="serverHost" autocomplete="off" required placeholder="203.0.113.10">
+                  </label>
+                  <label>
+                    <span>User</span>
+                    <input id="serverUser" autocomplete="off" placeholder="root">
+                  </label>
+                  <label>
+                    <span>Port</span>
+                    <input id="serverPort" type="number" min="1" max="65535" placeholder="22">
+                  </label>
+                  <label class="wide">
+                    <span>SSH key</span>
+                    <select id="serverKeySelect"></select>
+                    <input id="serverKeyPath" autocomplete="off" placeholder="/keys/id_ed25519" hidden>
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-card">
+                <h2 class="form-card-title">Organization</h2>
+                <div class="form-grid">
+                  <label>
+                    <span>Group</span>
+                    <select id="serverGroup"></select>
+                  </label>
+                  <label>
+                    <span>Bubble label <em>(max 3 chars)</em></span>
+                    <input id="serverBubbleLabel" autocomplete="off" maxlength="3" placeholder="DB1">
+                  </label>
+                  <label class="wide">
+                    <span>Tags</span>
+                    <input id="serverTags" autocomplete="off" placeholder="prod, web, client-a">
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-card">
+                <h2 class="form-card-title">Health snapshot</h2>
+                <div id="statusGrid" class="status-grid">
+                  <div class="metric">
+                    <span>State</span>
+                    <strong id="metricState">Unknown</strong>
+                  </div>
+                  <div class="metric">
+                    <span>Load</span>
+                    <strong id="metricLoad">--</strong>
+                  </div>
+                  <div class="metric">
+                    <span>Memory</span>
+                    <strong id="metricMemory">--</strong>
+                  </div>
+                  <div class="metric">
+                    <span>Disk</span>
+                    <strong id="metricDisk">--</strong>
+                  </div>
+                  <div class="metric">
+                    <span>OS</span>
+                    <strong id="metricOs">--</strong>
+                  </div>
+                  <div class="metric">
+                    <span>Last update</span>
+                    <strong id="metricLastReport">--</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section class="form-card">
+                <h2 class="form-card-title">Notes</h2>
+                <label class="notes-block">
+                  <textarea id="serverNotes" spellcheck="true" placeholder="Anything worth remembering about this server…"></textarea>
+                </label>
+              </section>
+
+              <section class="form-card agent-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2 class="form-card-title">Hourly monitoring agent</h2>
+                    <p>Runs once per hour via systemd timer or cron, sends a small report, then exits.</p>
+                  </div>
+                  <button type="button" id="copyInstallButton" class="secondary-button with-icon" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Copy
+                  </button>
+                </div>
+                <pre id="installCommand" class="command-block">Save the server first.</pre>
+              </section>
+            </form>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="authOverlay" class="auth-overlay" hidden>
+      <div class="auth-card">
+        <div class="auth-brand">
+          <div class="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          </div>
+          <span class="brand-name">Server Deck</span>
+        </div>
+        <h1 id="authTitle">Sign in</h1>
+        <p id="authSubtitle" class="auth-subtitle">Enter your email and password to continue.</p>
+        <form id="authForm" class="auth-form">
+          <label>
+            <span>Email</span>
+            <input id="authEmail" type="email" autocomplete="username" required>
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="authPassword" type="password" autocomplete="current-password" required minlength="8">
+          </label>
+          <label id="authConfirmRow" hidden>
+            <span>Confirm password</span>
+            <input id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="8">
+          </label>
+          <label id="authTotpRow" hidden>
+            <span>Authenticator code</span>
+            <input id="authTotp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
+          </label>
+          <button id="authSubmit" class="primary-button" type="submit">Sign in</button>
+          <p id="authError" class="auth-error" hidden></p>
+        </form>
+        <p class="auth-footnote">Access is restricted to localhost and your Tailscale network.</p>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/addon-fit.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,54 @@
+name: serverdeck
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: serverdeck
+      POSTGRES_USER: serverdeck
+      POSTGRES_PASSWORD: ${SERVERDECK_DB_PASSWORD:-serverdeck}
+    volumes:
+      - serverdeck-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U serverdeck -d serverdeck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATABASE_URL: postgres://serverdeck:${SERVERDECK_DB_PASSWORD:-serverdeck}@postgres:5432/serverdeck
+      # Folders inside the container that are scanned for SSH private keys.
+      SERVERDECK_KEY_DIRS: /keys:/home/node/.ssh
+      # Remaps key paths saved in the UI to their in-container mount.
+      # Example: /home/me/.ssh=/keys means a server saved with the key
+      # /home/me/.ssh/id_ed25519 resolves to /keys/id_ed25519 in the container.
+      SERVERDECK_KEY_PATH_REMAPS: ${SERVERDECK_KEY_PATH_REMAPS:-}
+      # Source networks allowed to reach the panel (comma-separated CIDRs).
+      # Default: loopback, Tailscale CGNAT (100.64.0.0/10), and private
+      # ranges (private ranges are required because Docker NAT rewrites the
+      # client IP to the bridge address).
+      SERVERDECK_ALLOW_NETWORKS: ${SERVERDECK_ALLOW_NETWORKS:-127.0.0.0/8,100.64.0.0/10,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+    ports:
+      # Never bound to 0.0.0.0 — localhost plus your Tailscale interface only.
+      # Set SERVERDECK_TAILSCALE_IP in .env to this machine's Tailscale IP
+      # (100.x.y.z) to reach the panel from your other Tailscale devices.
+      # The 127.0.0.2 fallback keeps the second binding harmlessly on
+      # loopback when the variable is unset.
+      - "127.0.0.1:8787:8787"
+      - "${SERVERDECK_TAILSCALE_IP:-127.0.0.2}:8787:8787"
+    volumes:
+      # Host folder with your SSH private keys, mounted read-only at /keys.
+      # The :z suffix relabels the folder on SELinux systems (Fedora/RHEL).
+      - ${SERVERDECK_KEY_DIR:-./keys}:/keys:ro,z
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  serverdeck-postgres:

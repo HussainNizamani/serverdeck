@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Local environment configuration (contains your Tailscale IP and paths)
+.env
+
+# Runtime data (JSON storage mode)
+data/*.json
+!data/.gitkeep
+
+# Local SSH keys folder (default SERVERDECK_KEY_DIR mount)
+keys/*
+!keys/.gitkeep
+
+# Local backups (database dumps, archives)
+backup/
+
+# Logs and temp files
+npm-debug.log*
+*.log
+*.tmp

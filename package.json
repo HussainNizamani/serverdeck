@@ -1,0 +1,34 @@
+{
+  "name": "serverdeck",
+  "version": "1.0.0",
+  "description": "Self-hosted personal server management panel: SSH panels, real web terminal, SFTP file manager, monitoring agent, and Tailscale-only access.",
+  "main": "server.js",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HussainNizamani/serverdeck.git"
+  },
+  "keywords": [
+    "ssh",
+    "server-management",
+    "self-hosted",
+    "terminal",
+    "sftp",
+    "monitoring",
+    "tailscale",
+    "xterm"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "pg": "^8.13.1",
+    "ssh2": "^1.17.0"
+  }
+}
