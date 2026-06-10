@@ -1,6 +1,15 @@
+# Never bake local secrets or keys into the image
+.env
+keys
+
+# Development-only files — not needed at runtime
+test
+.github
 .git
-data/state.json
+.claude
+backup
 node_modules
+data/state.json
 npm-debug.log
 Dockerfile
 docker-compose.yml
