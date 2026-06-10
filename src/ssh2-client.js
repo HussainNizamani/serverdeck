@@ -28,6 +28,14 @@ function connectionConfig(server) {
     keepaliveCountMax: 3
   };
 
+  // server.password is the already-decrypted plaintext, attached by the API
+  // layer right before connecting. It is never stored on the server record.
+  const password = String(server.password || "");
+  if (password) {
+    config.password = password;
+    config.tryKeyboard = true;
+  }
+
   if (server.keyPath) {
     const identity = resolveIdentity(server);
     if (identity.error) {
@@ -42,12 +50,12 @@ function connectionConfig(server) {
     } finally {
       identity.cleanup();
     }
-  } else {
+  } else if (!password) {
     const fallbackKey = defaultPrivateKey();
     if (fallbackKey) config.privateKey = fallbackKey;
     if (process.env.SSH_AUTH_SOCK) config.agent = process.env.SSH_AUTH_SOCK;
     if (!config.privateKey && !config.agent) {
-      throw new Error("No SSH key configured for this server and no default key or agent is available.");
+      throw new Error("No SSH key or password configured for this server, and no default key or agent is available.");
     }
   }
 
@@ -66,8 +74,72 @@ function connect(server) {
     const conn = new Client();
     conn.on("ready", () => resolve(conn));
     conn.on("error", err => reject(new Error(`SSH connection failed: ${err.message}`)));
+    if (config.tryKeyboard) {
+      // Some servers use keyboard-interactive instead of plain password auth;
+      // answer every prompt with the configured password.
+      conn.on("keyboard-interactive", (name, instructions, lang, prompts, finish) => {
+        finish(prompts.map(() => config.password));
+      });
+    }
     conn.connect(config);
   });
+}
+
+function execCommand(conn, command, { timeoutMs = 45000 } = {}) {
+  const startedAt = Date.now();
+  return new Promise(resolve => {
+    conn.exec(command, (err, stream) => {
+      if (err) {
+        resolve({ stdout: "", stderr: err.message, exitCode: null, signal: null, timedOut: false, durationMs: Date.now() - startedAt });
+        return;
+      }
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        stream.close();
+      }, timeoutMs);
+
+      stream.on("data", chunk => {
+        stdout += chunk.toString("utf8");
+        if (stdout.length > 300000) stdout = stdout.slice(-240000);
+      });
+      stream.stderr.on("data", chunk => {
+        stderr += chunk.toString("utf8");
+        if (stderr.length > 120000) stderr = stderr.slice(-90000);
+      });
+      stream.on("close", (code, signal) => {
+        clearTimeout(timer);
+        resolve({
+          stdout,
+          stderr,
+          exitCode: code ?? null,
+          signal: signal ?? null,
+          timedOut,
+          durationMs: Date.now() - startedAt
+        });
+      });
+    });
+  });
+}
+
+// Same result shape as ssh.js runSsh, but over the ssh2 library — used for
+// password-authenticated servers, where the openssh binary cannot be fed a
+// password non-interactively.
+async function runSsh2(server, command, options = {}) {
+  const startedAt = Date.now();
+  let conn;
+  try {
+    conn = await connect(server);
+  } catch (err) {
+    return { stdout: "", stderr: err.message, exitCode: null, signal: null, timedOut: false, durationMs: Date.now() - startedAt };
+  }
+  try {
+    return await execCommand(conn, command, options);
+  } finally {
+    conn.end();
+  }
 }
 
 function openShell(conn, { cols = 80, rows = 24 } = {}) {
@@ -146,6 +218,7 @@ function sftpDelete(sftp, targetPath, isDirectory) {
 }
 
 module.exports = {
+  runSsh2,
   connect,
   openShell,
   openSftp,

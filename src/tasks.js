@@ -1,4 +1,5 @@
 const { runSsh } = require("./ssh");
+const { runSsh2 } = require("./ssh2-client");
 
 const TASKS = [
   "overview",
@@ -229,7 +230,11 @@ async function runServerTask(server, body = {}) {
   const task = String(body.task || "overview");
   const command = commandForTask(body);
   const timeoutMs = task === "command" ? 90000 : 45000;
-  const result = await runSsh(server, command, { timeoutMs, batch: true });
+  // Password-authenticated servers go through the ssh2 library; the openssh
+  // binary (BatchMode) cannot accept a password non-interactively.
+  const result = server.password
+    ? await runSsh2(server, command, { timeoutMs })
+    : await runSsh(server, command, { timeoutMs, batch: true });
   return {
     task,
     ...result

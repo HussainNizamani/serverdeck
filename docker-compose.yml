@@ -34,6 +34,10 @@ services:
       # ranges (private ranges are required because Docker NAT rewrites the
       # client IP to the bridge address).
       SERVERDECK_ALLOW_NETWORKS: ${SERVERDECK_ALLOW_NETWORKS:-127.0.0.0/8,100.64.0.0/10,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # Optional secret used to encrypt saved SSH passwords. When set,
+      # database dumps alone cannot reveal them. Generate with:
+      #   openssl rand -hex 32
+      SERVERDECK_SECRET: ${SERVERDECK_SECRET:-}
     ports:
       # Never bound to 0.0.0.0 — localhost plus your Tailscale interface only.
       # Set SERVERDECK_TAILSCALE_IP in .env to this machine's Tailscale IP

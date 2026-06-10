@@ -123,6 +123,16 @@
                     <select id="serverKeySelect"></select>
                     <input id="serverKeyPath" autocomplete="off" placeholder="/keys/id_ed25519" hidden>
                   </label>
+                  <label class="wide">
+                    <span>SSH password <em>(optional — for servers without key auth; stored encrypted)</em></span>
+                    <input id="serverPassword" type="password" autocomplete="new-password" placeholder="Leave empty to use keys only">
+                  </label>
+                  <div class="wide checkbox-row" id="clearPasswordRow" hidden>
+                    <label>
+                      <input type="checkbox" id="serverPasswordClear">
+                      <span>Remove the saved password on next save</span>
+                    </label>
+                  </div>
                 </div>
               </section>
 

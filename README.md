@@ -44,8 +44,9 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
 - A Linux host (or anything that runs Docker) to run the panel on
 - Docker Engine with the Docker Compose plugin — **or** Node.js ≥ 22 for a
   bare-metal install
-- SSH key access to the servers you want to manage (password-only SSH is not
-  supported)
+- SSH access to the servers you want to manage — keys recommended; password
+  authentication is also supported (stored encrypted, see
+  [SSH passwords](#ssh-passwords))
 - Optional: [Tailscale](https://tailscale.com/) on the panel host and on the
   devices you browse from, for secure remote access
 
@@ -159,6 +160,7 @@ in `.env` (see `.env.example`); bare-metal installs export them directly.
 | `SERVERDECK_KEY_DIR` | `./keys` | Host folder with SSH private keys, mounted read-only at `/keys` in the container. |
 | `SERVERDECK_KEY_PATH_REMAPS` | *(empty)* | Comma-separated `from=to` path prefixes applied when a saved key path does not exist, e.g. `/home/me/.ssh=/keys`. |
 | `SERVERDECK_DB_PASSWORD` | `serverdeck` | Password for the bundled PostgreSQL (not reachable from outside the compose network). |
+| `SERVERDECK_SECRET` | *(auto-generated key in DB)* | Secret used to encrypt saved SSH passwords. Set it (e.g. `openssl rand -hex 32`) to keep DB dumps un-decryptable on their own. |
 | `SERVERDECK_ALLOW_NETWORKS` | loopback + `100.64.0.0/10` + RFC 1918 | Comma-separated CIDRs allowed to reach the panel. Everything else gets 403. |
 | `HOST` / `PORT` | `0.0.0.0` / `8787` | Bind address/port of the Node process *inside* the container (or on the host for bare-metal). |
 | `DATABASE_URL` | *(set by compose)* | PostgreSQL connection string. When unset, Server Deck stores everything in `data/state.json` instead. |
@@ -186,6 +188,27 @@ in `.env` (see `.env.example`); bare-metal installs export them directly.
 - If you previously saved servers with host-side key paths and later moved to
   Docker, add a remap instead of editing every server:
   `SERVERDECK_KEY_PATH_REMAPS=/home/you/.ssh=/keys`.
+
+## SSH passwords
+
+For servers that only allow password authentication (or where you simply
+don't want to install a key), set the **SSH password** field in SSH Settings.
+
+- Works everywhere keys work: panels, terminal, and the SFTP file manager.
+  Both plain `password` and `keyboard-interactive` SSH auth are handled. If a
+  key *and* a password are set, the key is tried first.
+- Passwords are stored **encrypted at rest** (AES-256-GCM). By default the
+  encryption key is auto-generated and kept in the database; set
+  `SERVERDECK_SECRET` in `.env` (e.g. `openssl rand -hex 32`) to keep the key
+  out of the database, so a database dump alone cannot reveal passwords.
+  Changing `SERVERDECK_SECRET` later invalidates saved passwords — re-enter
+  them once.
+- The API never returns the password (not even encrypted); the UI only shows
+  whether one is saved. Leave the field empty to keep the saved password, or
+  tick *Remove the saved password* to clear it.
+- Keys remain the recommended option: a reversible credential for your
+  servers is inherently more sensitive than a private key that never leaves
+  the panel host.
 
 ## Adding servers
 
@@ -353,7 +376,8 @@ Found a vulnerability? See [SECURITY.md](SECURITY.md).
 | `SSH key was not found: …` | The path saved on the server doesn't exist inside the container. Mount the right folder via `SERVERDECK_KEY_DIR` or add `SERVERDECK_KEY_PATH_REMAPS`. |
 | Keys missing from the dropdown on Fedora/RHEL | SELinux blocked the bind mount. The compose file uses `:z` already — make sure your override/custom mount does too. |
 | `PPK keys require puttygen` | Install `putty-tools` (Debian/Ubuntu) or `putty` (Fedora/Arch) — already included in the Docker image. |
-| `SSH connection failed: All configured authentication methods failed` | The chosen key isn't authorized on the target (`ssh -i <key> user@host` to verify), or the server needs a key instead of the default fallback. Password-only auth is unsupported. |
+| `SSH connection failed: All configured authentication methods failed` | The chosen key isn't authorized on the target (`ssh -i <key> user@host` to verify), or the saved password is wrong. |
+| `Saved password cannot be decrypted` | `SERVERDECK_SECRET` was set or changed after the password was saved. Re-enter the password in SSH Settings. |
 | Port 8787 already in use | Another service owns it. Change the published port in `docker-compose.yml`, e.g. `127.0.0.1:9000:8787`. |
 | `address already in use` for the Tailscale binding | `SERVERDECK_TAILSCALE_IP` is unset/wrong. Set it to the IP from `tailscale ip -4`. |
 | Postgres container never becomes healthy | `docker compose logs postgres`. A changed `SERVERDECK_DB_PASSWORD` does not apply to an existing volume — reset with `down -v` (deletes data) or change the password in Postgres manually. |

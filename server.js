@@ -8,6 +8,7 @@ const ssh2 = require("./src/ssh2-client");
 const { TASKS, runServerTask } = require("./src/tasks");
 const { acceptWebSocket } = require("./src/ws");
 const { createAuth, parseAllowedNetworks, isIpAllowed, DEFAULT_ALLOW_NETWORKS } = require("./src/auth");
+const { createSecrets } = require("./src/secrets");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -25,6 +26,38 @@ const store = DATABASE_URL
   : createStore(STATE_FILE);
 
 const auth = createAuth(store);
+const secrets = createSecrets(store);
+
+// Server records keep SSH passwords encrypted in `passwordEnc`. The API never
+// exposes that field — clients only see a hasPassword flag.
+function sanitizeServer(server) {
+  if (!server) return server;
+  const { passwordEnc, ...rest } = server;
+  return { ...rest, hasPassword: Boolean(passwordEnc) };
+}
+
+// Translates the plaintext `password` field of create/update requests into
+// the encrypted `passwordEnc` stored field. undefined = keep, "" = clear.
+async function applyPasswordInput(body) {
+  if (typeof body.password === "string") {
+    body.passwordEnc = body.password ? await secrets.encrypt(body.password) : "";
+  }
+  delete body.password;
+  return body;
+}
+
+// Attaches the decrypted password right before an SSH connection is made.
+async function withServerPassword(server) {
+  if (!server?.passwordEnc) return server;
+  try {
+    return { ...server, password: await secrets.decrypt(server.passwordEnc) };
+  } catch {
+    throw Object.assign(
+      new Error("Saved password cannot be decrypted (was SERVERDECK_SECRET changed?). Re-enter it in SSH Settings."),
+      { statusCode: 409 }
+    );
+  }
+}
 const ALLOWED_NETWORKS = parseAllowedNetworks(process.env.SERVERDECK_ALLOW_NETWORKS || DEFAULT_ALLOW_NETWORKS);
 
 function connectionAllowed(req) {
@@ -294,7 +327,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/servers") {
-      sendJson(res, 200, { servers: await store.listServers() });
+      sendJson(res, 200, { servers: (await store.listServers()).map(sanitizeServer) });
       return;
     }
 
@@ -331,22 +364,22 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/servers") {
-      const body = await readJson(req);
+      const body = await applyPasswordInput(await readJson(req));
       const server = await store.createServer(body);
-      sendJson(res, 201, { server });
+      sendJson(res, 201, { server: sanitizeServer(server) });
       return;
     }
 
     const serverId = parseServerIdFromPath(url.pathname, "/api/servers/");
     if (serverId) {
       if (req.method === "PUT" && url.pathname === `/api/servers/${serverId}`) {
-        const body = await readJson(req);
+        const body = await applyPasswordInput(await readJson(req));
         const server = await store.updateServer(serverId, body);
         if (!server) {
           sendJson(res, 404, { error: "Server not found" });
           return;
         }
-        sendJson(res, 200, { server });
+        sendJson(res, 200, { server: sanitizeServer(server) });
         return;
       }
 
@@ -381,7 +414,7 @@ async function handleApi(req, res, url) {
         return;
       }
       const body = await readJson(req, 128 * 1024);
-      const result = await runServerTask(server, body);
+      const result = await runServerTask(await withServerPassword(server), body);
       const outputTask = TASKS.includes(String(body.outputTask || "")) ? String(body.outputTask) : result.task;
       const historyEntry = await store.recordTaskRun(taskServerId, {
         task: outputTask,
@@ -393,7 +426,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, {
         ...result,
         historyEntry,
-        server: await store.getServer(taskServerId)
+        server: sanitizeServer(await store.getServer(taskServerId))
       });
       return;
     }
@@ -447,7 +480,7 @@ async function handleTerminalUpgrade(req, socket, url) {
 
   let conn = null;
   try {
-    conn = await ssh2.connect(server);
+    conn = await ssh2.connect(await withServerPassword(server));
     const stream = await ssh2.openShell(conn, { cols, rows });
 
     stream.on("data", chunk => peer.sendJson({ type: "output", data: chunk.toString("utf8") }));
@@ -490,11 +523,12 @@ function cleanRemotePath(value) {
 }
 
 async function handleSftpApi(req, res, url, serverId, op) {
-  const server = await store.getServer(serverId);
-  if (!server) {
+  const stored = await store.getServer(serverId);
+  if (!stored) {
     sendJson(res, 404, { error: "Server not found" });
     return;
   }
+  const server = await withServerPassword(stored);
 
   if (op === "list" && req.method === "GET") {
     const dirPath = cleanRemotePath(url.searchParams.get("path"));

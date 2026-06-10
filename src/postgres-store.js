@@ -75,6 +75,7 @@ function createPostgresStore(options = {}) {
         updated_at timestamptz not null
       )
     `);
+    await query("alter table servers add column if not exists password_enc text not null default ''");
     await query(`
       create table if not exists agent_reports (
         id uuid primary key,
@@ -194,6 +195,7 @@ function createPostgresStore(options = {}) {
       groupId: row.group_id || "",
       tags: row.tags || [],
       notes: row.notes || "",
+      passwordEnc: row.password_enc || "",
       agentToken: row.agent_token,
       lastReport: reportHistory[0] || null,
       reportHistory,
@@ -274,8 +276,8 @@ function createPostgresStore(options = {}) {
     const createdAt = nowIso();
     const result = await query(`
       insert into servers (
-        id, name, host, user_name, port, key_path, bubble_label, group_id, tags, notes, agent_token, created_at, updated_at
-      ) values ($1, $2, $3, $4, $5, $6, $7, nullif($8, '')::uuid, $9, $10, $11, $12, $12)
+        id, name, host, user_name, port, key_path, bubble_label, group_id, tags, notes, password_enc, agent_token, created_at, updated_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, nullif($8, '')::uuid, $9, $10, $11, $12, $13, $13)
       returning *
     `, [
       crypto.randomUUID(),
@@ -288,6 +290,7 @@ function createPostgresStore(options = {}) {
       normalized.groupId,
       normalizeTags(normalized.tags),
       normalized.notes,
+      normalized.passwordEnc,
       randomSecret(),
       createdAt
     ]);
@@ -310,7 +313,8 @@ function createPostgresStore(options = {}) {
         group_id = nullif($8, '')::uuid,
         tags = $9,
         notes = $10,
-        updated_at = $11
+        password_enc = $11,
+        updated_at = $12
       where id = $1
       returning *
     `, [
@@ -324,6 +328,7 @@ function createPostgresStore(options = {}) {
       normalized.groupId,
       normalizeTags(normalized.tags),
       normalized.notes,
+      normalized.passwordEnc,
       nowIso()
     ]);
     return serverFromRow(result.rows[0]);

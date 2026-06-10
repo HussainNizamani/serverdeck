@@ -4,6 +4,17 @@ All notable changes to Server Deck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-11
+
+### Added
+
+- **SSH password authentication** for servers without key access. Works
+  across panels, terminal, and SFTP; supports both `password` and
+  `keyboard-interactive` methods. Passwords are stored encrypted
+  (AES-256-GCM) and never returned by the API; an optional
+  `SERVERDECK_SECRET` keeps the encryption key out of the database.
+  Password-authenticated panel tasks run through the ssh2 library.
+
 ## [1.0.0] - 2026-06-10
 
 First stable open-source release.

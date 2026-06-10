@@ -51,6 +51,9 @@ function normalizeServerInput(input = {}, previous = {}) {
   const groupId = String(input.groupId ?? previous.groupId ?? "").trim();
   const notes = String(input.notes ?? previous.notes ?? "");
   const tags = normalizeTags(input.tags ?? previous.tags ?? []);
+  // Already-encrypted password blob. undefined keeps the previous value,
+  // an empty string clears it.
+  const passwordEnc = input.passwordEnc !== undefined ? String(input.passwordEnc) : String(previous.passwordEnc || "");
 
   if (!host) {
     const err = new Error("Host is required");
@@ -72,7 +75,8 @@ function normalizeServerInput(input = {}, previous = {}) {
     bubbleLabel,
     groupId,
     tags,
-    notes
+    notes,
+    passwordEnc
   };
 }
 

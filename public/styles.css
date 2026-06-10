@@ -1744,3 +1744,25 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================================
+   Checkbox rows
+   ============================================================ */
+
+.checkbox-row label {
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  font-size: 12.5px;
+  gap: 9px;
+}
+
+.checkbox-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  width: 16px;
+}

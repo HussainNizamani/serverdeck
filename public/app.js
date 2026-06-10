@@ -128,6 +128,9 @@ const elements = {
   serverGroup: document.querySelector("#serverGroup"),
   serverKeySelect: document.querySelector("#serverKeySelect"),
   serverKeyPath: document.querySelector("#serverKeyPath"),
+  serverPassword: document.querySelector("#serverPassword"),
+  serverPasswordClear: document.querySelector("#serverPasswordClear"),
+  clearPasswordRow: document.querySelector("#clearPasswordRow"),
   serverTags: document.querySelector("#serverTags"),
   serverNotes: document.querySelector("#serverNotes"),
   metricState: document.querySelector("#metricState"),
@@ -384,7 +387,7 @@ function setBusy(serverId, task, value) {
 
 function formValue() {
   const selectedKey = elements.serverKeySelect.value;
-  return {
+  const payload = {
     name: elements.serverName.value.trim(),
     host: elements.serverHost.value.trim(),
     user: elements.serverUser.value.trim() || "root",
@@ -395,6 +398,13 @@ function formValue() {
     tags: elements.serverTags.value,
     notes: elements.serverNotes.value
   };
+  // Password semantics: omitted = keep saved, "" = clear, value = replace.
+  if (elements.serverPasswordClear.checked) {
+    payload.password = "";
+  } else if (elements.serverPassword.value) {
+    payload.password = elements.serverPassword.value;
+  }
+  return payload;
 }
 
 function renderKeyOptions(selectedKeyPath = "") {
@@ -434,6 +444,8 @@ function fillForm(server) {
     elements.serverGroup,
     elements.serverKeySelect,
     elements.serverKeyPath,
+    elements.serverPassword,
+    elements.serverPasswordClear,
     elements.serverTags,
     elements.serverNotes
   ]) {
@@ -449,6 +461,12 @@ function fillForm(server) {
   elements.serverBubbleLabel.value = server?.bubbleLabel || "";
   renderGroupOptions(server?.groupId || "");
   renderKeyOptions(server?.keyPath || "");
+  elements.serverPassword.value = "";
+  elements.serverPassword.placeholder = server?.hasPassword
+    ? "•••••• saved — leave empty to keep it"
+    : "Leave empty to use keys only";
+  elements.clearPasswordRow.hidden = !server?.hasPassword;
+  elements.serverPasswordClear.checked = false;
   elements.serverTags.value = (server?.tags || []).join(", ");
   elements.serverNotes.value = server?.notes || "";
   elements.installCommand.textContent = installCommand(server);
@@ -725,7 +743,10 @@ function renderDetails() {
     return;
   }
 
-  const auth = server.keyPath ? `key ${server.keyPath.endsWith(".ppk") ? "PPK" : "file"}` : "default SSH auth";
+  const authParts = [];
+  if (server.keyPath) authParts.push(`key ${server.keyPath.endsWith(".ppk") ? "PPK" : "file"}`);
+  if (server.hasPassword) authParts.push("password");
+  const auth = authParts.join(" + ") || "default SSH auth";
   const group = groupNameFor(server.groupId);
   elements.selectedTitle.textContent = `${server.name} · ${currentOp().label}`;
   elements.selectedMeta.textContent = `${group ? `${group} · ` : ""}${server.user}@${server.host}:${server.port} · ${auth}`;
