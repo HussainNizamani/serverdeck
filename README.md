@@ -1,5 +1,9 @@
 # Server Deck
 
+[![CI](https://github.com/HussainNizamani/serverdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/HussainNizamani/serverdeck/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/HussainNizamani/serverdeck)](https://github.com/HussainNizamani/serverdeck/releases)
+
 **Server Deck is a self-hosted, single-user server management panel.** Add your
 Linux servers once, then manage them all from one clean web UI: live SSH
 terminals, an SFTP file manager, service control, logs, storage, network,
