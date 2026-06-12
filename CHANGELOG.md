@@ -4,6 +4,33 @@ All notable changes to Server Deck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-12
+
+### Added
+
+- **New Terminal tab** (replaces the single-session Terminal view): open up to 10 SSH terminals side by side in a
+  resizable, drag-to-rearrange grid (powered by dockview-core). Mix servers
+  freely, per-pane server picker with color-coded identity strips, maximize
+  per pane, Alt+1-9 to jump between panes, disconnect overlay with one-click
+  reconnect, and the layout persists across reloads.
+- Collapsible feature nav (left menu) plus a "Focus mode" button that
+  collapses both side menus at once for maximum terminal space; collapse
+  states persist across reloads.
+- **Duplicate server**: a three-dot menu on each server row clones the full
+  profile (key, encrypted password, group, tags, notes) with an
+  auto-incremented name ("Dubai General 1" -> "Dubai General 2").
+- **Broadcast input** in the terminal grid: send a command to every marked
+  terminal at once via a line-buffered command bar (nothing is sent until
+  Enter), with an optional "Live keys" mode that mirrors raw keystrokes
+  (tmux synchronize-panes style). Receiving panes get an unmissable red
+  striped warning, each pane can be excluded, and broadcast auto-disables
+  when a pane closes or changes server.
+
+### Fixed
+
+- Collapsing the server list now actually reclaims the freed space for the
+  main content area (the shell grid previously kept the full column width).
+
 ## [1.1.0] - 2026-06-11
 
 ### Added

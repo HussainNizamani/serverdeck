@@ -12,14 +12,14 @@ const OPS = [
   { id: "files", label: "Files", meta: "SFTP file manager: browse, upload, download" },
   { id: "command", label: "Command", meta: "Run a remote shell command" },
   { id: "settings", label: "SSH Settings", meta: "Server connection, group, notes, and agent install" },
-  { id: "terminal", label: "Terminal", meta: "Interactive SSH and SFTP sessions" },
+  { id: "multiterm", label: "Terminal", meta: "SSH terminals — one or up to 10 side by side, across servers" },
   { id: "panel", label: "Settings", meta: "Panel appearance, account, and authentication" }
 ];
 
 const NAV_SECTIONS = [
   { label: "Monitor", ids: ["overview", "services", "logs", "processes"] },
   { label: "System", ids: ["storage", "network", "updates", "containers", "users", "security"] },
-  { label: "Tools", ids: ["files", "command", "terminal"] },
+  { label: "Tools", ids: ["files", "command", "multiterm"] },
   { label: "Manage", ids: ["settings", "panel"] }
 ];
 
@@ -37,6 +37,7 @@ const OP_ICONS = {
   files: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
   command: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
   terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  multiterm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
   panel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'
 };
@@ -45,7 +46,10 @@ const STORAGE_KEYS = {
   activeOps: "serverDeck.activeOps",
   selectedId: "serverDeck.selectedId",
   theme: "serverDeck.theme",
-  accent: "serverDeck.accent"
+  accent: "serverDeck.accent",
+  navCollapsed: "serverDeck.navCollapsed",
+  railCollapsed: "serverDeck.railCollapsed",
+  multiLayout: "serverDeck.multiLayout"
 };
 
 const ACCENTS = [
@@ -85,7 +89,9 @@ const state = {
   draftNew: false,
   addMenuOpen: false,
   groupCreateOpen: false,
-  serverRailCollapsed: false,
+  serverRailCollapsed: readStoredValue(STORAGE_KEYS.railCollapsed) === "1",
+  featureNavCollapsed: readStoredValue(STORAGE_KEYS.navCollapsed) === "1",
+  serverMenuOpenId: null,
   terminals: [],
   activeTerminalId: null,
   config: null,
@@ -99,6 +105,8 @@ const state = {
 };
 
 const elements = {
+  featureNav: document.querySelector(".feature-nav"),
+  collapseNavButton: document.querySelector("#collapseNavButton"),
   serverRail: document.querySelector("#serverRail"),
   collapseServerRailButton: document.querySelector("#collapseServerRailButton"),
   newServerButton: document.querySelector("#newServerButton"),
@@ -582,9 +590,12 @@ function renderOpsTabs() {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `sidebar-tab ${state.activeOps === op.id ? "active" : ""}`;
-      button.title = op.meta;
+      button.title = state.featureNavCollapsed ? `${op.label} — ${op.meta}` : op.meta;
       button.innerHTML = OP_ICONS[op.id] || "";
-      button.append(document.createTextNode(op.label));
+      const tabLabel = document.createElement("span");
+      tabLabel.className = "tab-label";
+      tabLabel.textContent = op.label;
+      button.append(tabLabel);
       button.addEventListener("click", () => {
         setActiveOps(op.id);
         if (op.id === "settings") {
@@ -616,6 +627,8 @@ function renderGroupOptions(selectedGroupId = "") {
 
 function renderList() {
   renderOpsTabs();
+  elements.featureNav.classList.toggle("collapsed", state.featureNavCollapsed);
+  elements.collapseNavButton.title = state.featureNavCollapsed ? "Expand menu" : "Collapse menu";
   elements.serverRail.classList.toggle("collapsed", state.serverRailCollapsed);
   elements.collapseServerRailButton.title = state.serverRailCollapsed ? "Expand server list" : "Collapse server list";
   if (elements.railCount) {
@@ -706,12 +719,65 @@ function renderServerSelector(server) {
   host.textContent = groupName ? `${groupName} · ${server.user}@${server.host}:${server.port}` : `${server.user}@${server.host}:${server.port}`;
   body.append(name, host);
 
-  button.append(bubble, body);
-  return button;
+  const kebab = document.createElement("span");
+  kebab.className = "server-kebab";
+  kebab.title = "Server actions";
+  kebab.setAttribute("role", "button");
+  kebab.tabIndex = 0;
+  kebab.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>';
+  kebab.addEventListener("click", event => {
+    event.stopPropagation();
+    state.serverMenuOpenId = state.serverMenuOpenId === server.id ? null : server.id;
+    renderList();
+  });
+
+  button.append(bubble, body, kebab);
+
+  if (state.serverMenuOpenId !== server.id) {
+    return button;
+  }
+
+  const row = document.createElement("div");
+  row.className = "server-row";
+  const menu = document.createElement("div");
+  menu.className = "create-menu server-row-menu";
+  menu.addEventListener("click", event => event.stopPropagation());
+  const duplicate = document.createElement("button");
+  duplicate.type = "button";
+  duplicate.setAttribute("role", "menuitem");
+  duplicate.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Duplicate';
+  duplicate.addEventListener("click", () => duplicateServer(server.id));
+  menu.append(duplicate);
+  row.append(button, menu);
+  return row;
+}
+
+async function duplicateServer(serverId) {
+  state.serverMenuOpenId = null;
+  try {
+    const response = await api(`/api/servers/${serverId}/duplicate`, { method: "POST" });
+    state.servers.push(response.server);
+    setSelectedId(response.server.id);
+    showToast(`Duplicated as "${response.server.name}".`);
+  } catch (error) {
+    showToast(error.message);
+  }
+  render();
 }
 
 function renderDetails() {
   const server = selectedServer();
+
+  if (state.activeOps === "multiterm" && !state.draftNew) {
+    const count = multiDock ? multiDock.panels.length : 0;
+    elements.selectedTitle.textContent = "Terminal";
+    elements.selectedMeta.textContent = count > 0
+      ? `${count} of ${MULTI_MAX_PANES} terminals open`
+      : `Open up to ${MULTI_MAX_PANES} terminals side by side, across servers.`;
+    elements.openTerminalButton.disabled = !server;
+    elements.deleteServerButton.disabled = true;
+    return;
+  }
 
   if (state.activeOps === "panel" && !state.draftNew) {
     elements.selectedTitle.textContent = "Settings";
@@ -766,9 +832,15 @@ function renderContent() {
   }
 
   elements.contentPane.innerHTML = "";
+  elements.contentPane.classList.toggle("flush", state.activeOps === "multiterm");
 
   if (state.activeOps === "panel") {
     elements.contentPane.append(renderPanelSettings());
+    return;
+  }
+
+  if (state.activeOps === "multiterm") {
+    elements.contentPane.append(renderMultiTerminalPanel());
     return;
   }
 
@@ -1728,6 +1800,7 @@ async function deleteServer() {
   await api(`/api/servers/${server.id}`, { method: "DELETE" });
   state.servers = state.servers.filter(item => item.id !== server.id);
   disposeTerminalsForServer(server.id);
+  closeMultiPanesForServer(server.id);
   setSelectedId(state.servers[0]?.id || null);
   showToast("Server deleted.");
   render();
@@ -1780,7 +1853,16 @@ function xtermTheme() {
 function openTerminal() {
   const server = selectedServer();
   if (!server) return;
-  openTerminalForServer(server);
+  setActiveOps("multiterm");
+  render();
+  const tryAdd = attempts => {
+    if (multiDock) {
+      addMultiPane(server.id);
+      return;
+    }
+    if (attempts > 0) window.requestAnimationFrame(() => tryAdd(attempts - 1));
+  };
+  window.requestAnimationFrame(() => tryAdd(10));
 }
 
 function openTerminalForServer(server) {
@@ -1830,12 +1912,14 @@ function connectTerminalSocket(session) {
 
   socket.addEventListener("close", () => {
     session.term.write("\r\n\x1b[90m[disconnected]\x1b[0m\r\n");
+    session.onSocketClose?.();
   });
 
   session.term.onData(data => {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "input", data }));
     }
+    session.onInput?.(data);
   });
 
   session.term.onResize(({ cols, rows }) => {
@@ -1905,6 +1989,568 @@ window.addEventListener("resize", () => {
   }
 });
 
+/* ---------- Multi Terminals (dockview grid) ----------
+   Up to MULTI_MAX_PANES xterm.js terminals tiled in a dockview-core grid.
+   Pane sessions and the dock DOM live in module scope so they survive the
+   full re-renders, exactly like the single-terminal containers above. */
+
+const MULTI_MAX_PANES = 10;
+const MULTI_PANE_COLORS = ["#5b8cff", "#2fbf8f", "#f59e0b", "#f0608c", "#8b7cf6", "#22b8cf", "#e8590c", "#94d82d", "#da77f2", "#4dabf7"];
+
+let multiDock = null;
+let multiUi = null;
+const multiPanes = new Map();
+let multiLayoutSaveTimer = 0;
+const multiBroadcast = { on: false, live: false };
+
+function multiBroadcastTargets() {
+  return [...multiPanes.values()].filter(pane =>
+    pane.broadcastEnabled && pane.session?.socket?.readyState === WebSocket.OPEN);
+}
+
+function setMultiBroadcast(on, reason = "") {
+  if (multiBroadcast.on === on) return;
+  multiBroadcast.on = on;
+  if (!on) {
+    multiBroadcast.live = false;
+    if (reason) showToast(`Broadcast turned off — ${reason}`);
+  }
+  refreshBroadcastUi();
+}
+
+function refreshBroadcastUi() {
+  if (!multiUi) return;
+  const targets = multiBroadcastTargets();
+  multiUi.bcastBar.hidden = !multiBroadcast.on;
+  multiUi.broadcastButton.className = multiBroadcast.on ? "danger-button" : "secondary-button";
+  multiUi.broadcastButton.textContent = multiBroadcast.on ? "Broadcast ON" : "Broadcast";
+  multiUi.bcastBadge.textContent = `BROADCAST → ${targets.length} terminal${targets.length === 1 ? "" : "s"}`;
+  multiUi.bcastInput.placeholder = "Type a command, press Enter to send to the marked terminals";
+  multiUi.bcastLive.checked = multiBroadcast.live;
+  for (const pane of multiPanes.values()) {
+    const enrolled = multiBroadcast.on && pane.broadcastEnabled && Boolean(pane.session);
+    pane.root.classList.toggle("broadcasting", enrolled);
+    if (pane.broadcastToggle) {
+      pane.broadcastToggle.hidden = !multiBroadcast.on;
+      pane.broadcastToggle.classList.toggle("active", pane.broadcastEnabled);
+      pane.broadcastToggle.title = pane.broadcastEnabled ? "Exclude from broadcast" : "Include in broadcast";
+    }
+  }
+}
+
+function sendMultiBroadcastCommand(value) {
+  const command = String(value || "");
+  if (!command.trim()) return;
+  const targets = multiBroadcastTargets();
+  if (targets.length === 0) {
+    showToast("No connected terminals are included in the broadcast.");
+    return;
+  }
+  for (const target of targets) {
+    target.session.socket.send(JSON.stringify({ type: "input", data: `${command}\r` }));
+  }
+}
+
+function serverAccentColor(serverId) {
+  let hash = 0;
+  for (const ch of String(serverId)) {
+    hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  }
+  return MULTI_PANE_COLORS[hash % MULTI_PANE_COLORS.length];
+}
+
+function multiIconButton(title, svg, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "multi-icon-button";
+  button.title = title;
+  button.innerHTML = svg;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function buildMultiRoot() {
+  const root = document.createElement("section");
+  root.className = "multi-wrap";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "multi-toolbar";
+
+  const left = document.createElement("div");
+  left.className = "multi-toolbar-side";
+  const addButton = actionButton("New terminal", "primary-button", () => addMultiPane(""));
+  const count = document.createElement("span");
+  count.className = "multi-count";
+  left.append(addButton, count);
+
+  const right = document.createElement("div");
+  right.className = "multi-toolbar-side";
+  const hint = document.createElement("span");
+  hint.className = "multi-hint";
+  hint.textContent = "Drag tabs to split · drag dividers to resize · Alt+1–9 to jump";
+  const focusButton = actionButton("Focus mode", "secondary-button", () => {
+    const collapse = !(state.featureNavCollapsed && state.serverRailCollapsed);
+    state.featureNavCollapsed = collapse;
+    state.serverRailCollapsed = collapse;
+    writeStoredValue(STORAGE_KEYS.navCollapsed, collapse ? "1" : "");
+    writeStoredValue(STORAGE_KEYS.railCollapsed, collapse ? "1" : "");
+    render();
+  });
+  const closeAllButton = actionButton("Close all", "secondary-button", () => {
+    const total = multiDock ? multiDock.panels.length : 0;
+    if (total === 0) return;
+    if (!window.confirm(`Close all ${total} terminal${total === 1 ? "" : "s"}?`)) return;
+    multiDock.closeAllGroups();
+    refreshMultiToolbar();
+  });
+  const broadcastButton = actionButton("Broadcast", "secondary-button", () => {
+    if (multiBroadcast.on) {
+      setMultiBroadcast(false);
+    } else {
+      multiBroadcast.on = true;
+      refreshBroadcastUi();
+      multiUi.bcastInput.focus();
+    }
+  });
+  right.append(hint, broadcastButton, focusButton, closeAllButton);
+
+  toolbar.append(left, right);
+
+  const bcastBar = document.createElement("div");
+  bcastBar.className = "multi-bcast-bar";
+  bcastBar.hidden = true;
+  const bcastBadge = document.createElement("span");
+  bcastBadge.className = "multi-bcast-badge";
+  const bcastInput = document.createElement("input");
+  bcastInput.autocomplete = "off";
+  bcastInput.spellcheck = false;
+  bcastInput.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendMultiBroadcastCommand(bcastInput.value);
+      bcastInput.value = "";
+    } else if (event.key === "Escape") {
+      setMultiBroadcast(false);
+    }
+  });
+  const bcastSend = actionButton("Send", "secondary-button", () => {
+    sendMultiBroadcastCommand(bcastInput.value);
+    bcastInput.value = "";
+  });
+  const bcastLiveLabel = document.createElement("label");
+  bcastLiveLabel.className = "multi-bcast-live";
+  bcastLiveLabel.title = "Forward every keystroke typed in a marked terminal to all other marked terminals (tmux synchronize-panes)";
+  const bcastLive = document.createElement("input");
+  bcastLive.type = "checkbox";
+  bcastLive.addEventListener("change", () => {
+    multiBroadcast.live = bcastLive.checked;
+  });
+  bcastLiveLabel.append(bcastLive, document.createTextNode("Live keys"));
+  bcastBar.append(bcastBadge, bcastInput, bcastSend, bcastLiveLabel);
+
+  const dockHost = document.createElement("div");
+  dockHost.className = "multi-dock";
+
+  root.append(toolbar, bcastBar, dockHost);
+  multiUi = { root, addButton, count, focusButton, closeAllButton, broadcastButton, bcastBar, bcastBadge, bcastInput, bcastLive, dockHost };
+}
+
+function refreshMultiToolbar() {
+  if (!multiUi) return;
+  const total = multiDock ? multiDock.panels.length : 0;
+  multiUi.count.textContent = `${total} / ${MULTI_MAX_PANES}`;
+  multiUi.addButton.disabled = total >= MULTI_MAX_PANES;
+  multiUi.closeAllButton.disabled = total === 0;
+  const bothCollapsed = state.featureNavCollapsed && state.serverRailCollapsed;
+  multiUi.focusButton.textContent = bothCollapsed ? "Exit focus mode" : "Focus mode";
+  multiUi.focusButton.title = bothCollapsed ? "Expand both side menus" : "Collapse both side menus for more space";
+  refreshBroadcastUi();
+}
+
+function renderMultiTerminalPanel() {
+  if (!multiUi) buildMultiRoot();
+  refreshMultiToolbar();
+  window.requestAnimationFrame(() => {
+    if (!multiDock) initMultiDock();
+    refreshMultiPanes();
+  });
+  return multiUi.root;
+}
+
+function initMultiDock() {
+  if (multiDock) return;
+  const dockview = window["dockview-core"];
+  if (!dockview) {
+    multiUi.dockHost.textContent = "Failed to load the layout library (dockview-core). Reload the page or reinstall dependencies.";
+    return;
+  }
+
+  multiDock = dockview.createDockview(multiUi.dockHost, {
+    theme: { ...dockview.themeAbyss, gap: 5 },
+    scrollbars: "native",
+    getTabContextMenuItems: () => ["close", "closeOthers", "closeAll"],
+    createComponent: options => createMultiPaneComponent(options.id),
+    createWatermarkComponent: createMultiWatermark,
+    createRightHeaderActionComponent: createMultiGroupActions
+  });
+
+  multiDock.onDidLayoutChange(() => {
+    scheduleMultiLayoutSave();
+    refreshMultiToolbar();
+  });
+
+  const stored = readStoredValue(STORAGE_KEYS.multiLayout);
+  if (stored) {
+    try {
+      multiDock.fromJSON(JSON.parse(stored));
+    } catch {
+      writeStoredValue(STORAGE_KEYS.multiLayout, "");
+    }
+  }
+  refreshMultiToolbar();
+}
+
+function scheduleMultiLayoutSave() {
+  window.clearTimeout(multiLayoutSaveTimer);
+  multiLayoutSaveTimer = window.setTimeout(() => {
+    if (!multiDock) return;
+    if (multiDock.panels.length === 0) {
+      writeStoredValue(STORAGE_KEYS.multiLayout, "");
+      return;
+    }
+    try {
+      writeStoredValue(STORAGE_KEYS.multiLayout, JSON.stringify(multiDock.toJSON()));
+    } catch {
+      // Serialization failures should never break the UI.
+    }
+  }, 400);
+}
+
+function multiSplitTarget() {
+  let best = null;
+  for (const group of multiDock.groups) {
+    const area = (group.api.width || 0) * (group.api.height || 0);
+    if (!best || area > best.area) best = { group, area };
+  }
+  if (!best) return undefined;
+  const direction = (best.group.api.width || 0) >= (best.group.api.height || 0) ? "right" : "below";
+  return { referenceGroup: best.group, direction };
+}
+
+function addMultiPane(serverId = "") {
+  if (!multiDock) return;
+  if (multiDock.panels.length >= MULTI_MAX_PANES) {
+    showToast(`Limit of ${MULTI_MAX_PANES} terminals reached.`);
+    return;
+  }
+  const server = state.servers.find(item => item.id === serverId);
+  const panel = multiDock.addPanel({
+    id: `mt-${randomId()}`,
+    component: "terminal",
+    title: server ? (server.name || server.host) : "New terminal",
+    params: { serverId: server ? server.id : "" },
+    position: multiSplitTarget()
+  });
+  panel.api.setActive();
+  refreshMultiToolbar();
+}
+
+function createMultiPaneComponent(panelId) {
+  const root = document.createElement("div");
+  root.className = "multi-pane";
+  const pane = { id: panelId, root, serverId: "", session: null, api: null, fitTimer: 0, broadcastEnabled: true, broadcastToggle: null };
+  return {
+    element: root,
+    init(params) {
+      pane.api = params.api;
+      pane.serverId = params.params?.serverId || "";
+      multiPanes.set(panelId, pane);
+      params.api.onDidActiveChange(event => {
+        pane.root.classList.toggle("focused", event.isActive);
+        if (event.isActive && pane.session) pane.session.term.focus();
+      });
+      params.api.onDidDimensionsChange(() => scheduleMultiPaneFit(pane));
+      renderMultiPaneContent(pane);
+    },
+    dispose() {
+      multiPanes.delete(panelId);
+      disposeMultiPaneSession(pane);
+      if (multiBroadcast.on) setMultiBroadcast(false, "a terminal closed.");
+    }
+  };
+}
+
+function renderMultiPaneContent(pane) {
+  const server = state.servers.find(item => item.id === pane.serverId);
+  if (server) {
+    startMultiPaneSession(pane, server);
+  } else {
+    renderMultiPanePicker(pane);
+  }
+}
+
+function renderMultiPanePicker(pane) {
+  disposeMultiPaneSession(pane);
+  pane.root.innerHTML = "";
+  pane.root.style.removeProperty("--pane-accent");
+
+  const picker = document.createElement("div");
+  picker.className = "multi-pane-picker";
+
+  const title = document.createElement("strong");
+  title.textContent = "Connect a terminal";
+  picker.append(title);
+
+  if (state.servers.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "No servers available yet.";
+    picker.append(empty);
+  } else {
+    if (pane.serverId) {
+      const note = document.createElement("p");
+      note.textContent = "The saved server is gone — pick another.";
+      picker.append(note);
+    }
+    const select = document.createElement("select");
+    for (const section of groupedServers(state.servers)) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = section.name;
+      for (const server of section.servers) {
+        const option = document.createElement("option");
+        option.value = server.id;
+        option.textContent = `${server.name || server.host} · ${server.user || "root"}@${server.host}`;
+        optgroup.append(option);
+      }
+      select.append(optgroup);
+    }
+    if (state.selectedId && state.servers.some(item => item.id === state.selectedId)) {
+      select.value = state.selectedId;
+    }
+    const connect = actionButton("Connect", "primary-button", () => {
+      const server = state.servers.find(item => item.id === select.value);
+      if (server) startMultiPaneSession(pane, server);
+    });
+    picker.append(select, connect);
+  }
+
+  pane.root.append(picker);
+}
+
+function startMultiPaneSession(pane, server) {
+  disposeMultiPaneSession(pane);
+  pane.serverId = server.id;
+  pane.api?.updateParameters({ serverId: server.id });
+  pane.api?.setTitle(server.name || server.host);
+  pane.root.innerHTML = "";
+  pane.root.style.setProperty("--pane-accent", serverAccentColor(server.id));
+
+  const head = document.createElement("div");
+  head.className = "multi-pane-head";
+  const dot = document.createElement("span");
+  dot.className = "pane-dot";
+  const name = document.createElement("span");
+  name.className = "pane-name";
+  name.textContent = server.name || server.host;
+  const host = document.createElement("span");
+  host.className = "pane-host";
+  host.textContent = `${server.user || "root"}@${server.host}:${server.port || 22}`;
+  const actions = document.createElement("div");
+  actions.className = "pane-actions";
+  actions.append(
+    multiIconButton("Change server", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>', () => {
+      pane.serverId = "";
+      pane.api?.updateParameters({ serverId: "" });
+      pane.api?.setTitle("New terminal");
+      if (multiBroadcast.on) setMultiBroadcast(false, "a terminal changed server.");
+      renderMultiPanePicker(pane);
+    })
+  );
+  const broadcastToggle = multiIconButton("Exclude from broadcast", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5M19.1 4.9c3.9 3.9 3.9 10.3 0 14.2"/><circle cx="12" cy="12" r="2"/></svg>', () => {
+    pane.broadcastEnabled = !pane.broadcastEnabled;
+    refreshBroadcastUi();
+  });
+  broadcastToggle.hidden = !multiBroadcast.on;
+  pane.broadcastToggle = broadcastToggle;
+  actions.prepend(broadcastToggle);
+  head.append(dot, name, host, actions);
+
+  const termHost = document.createElement("div");
+  termHost.className = "multi-pane-term";
+  pane.root.append(head, termHost);
+
+  const term = new window.Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: 'JetBrains Mono, SFMono-Regular, Consolas, monospace',
+    scrollback: 8000,
+    theme: xtermTheme()
+  });
+  const fit = new window.FitAddon.FitAddon();
+  term.loadAddon(fit);
+
+  const session = { id: `multi-${pane.id}`, serverId: server.id, term, fit, container: termHost, socket: null, opened: true };
+  session.onSocketClose = () => {
+    if (pane.session === session) showMultiPaneReconnect(pane);
+    refreshBroadcastUi();
+  };
+  session.onInput = data => {
+    if (!multiBroadcast.on || !multiBroadcast.live || !pane.broadcastEnabled) return;
+    for (const target of multiBroadcastTargets()) {
+      if (target !== pane) {
+        target.session.socket.send(JSON.stringify({ type: "input", data }));
+      }
+    }
+  };
+  pane.session = session;
+
+  term.open(termHost);
+  window.requestAnimationFrame(() => {
+    if (pane.session !== session) return;
+    try {
+      fit.fit();
+    } catch {
+      // The pane can be zero-sized mid-drag; the next dimension event refits.
+    }
+    connectTerminalSocket(session);
+    if (pane.api?.isActive) term.focus();
+  });
+  refreshBroadcastUi();
+}
+
+function showMultiPaneReconnect(pane) {
+  if (!pane.root.isConnected || pane.root.querySelector(".multi-pane-overlay")) return;
+  const overlay = document.createElement("div");
+  overlay.className = "multi-pane-overlay";
+  const label = document.createElement("span");
+  label.textContent = "Disconnected";
+  const reconnect = actionButton("Reconnect", "secondary-button", () => {
+    overlay.remove();
+    const server = state.servers.find(item => item.id === pane.serverId);
+    if (server) {
+      startMultiPaneSession(pane, server);
+    } else {
+      renderMultiPanePicker(pane);
+    }
+  });
+  overlay.append(label, reconnect);
+  pane.root.append(overlay);
+}
+
+function disposeMultiPaneSession(pane) {
+  const session = pane.session;
+  if (!session) return;
+  pane.session = null;
+  session.onSocketClose = null;
+  session.onInput = null;
+  try {
+    session.socket?.close();
+  } catch {
+    // Socket may already be closed.
+  }
+  try {
+    session.term.dispose();
+  } catch {
+    // Disposing twice throws; the pane is going away regardless.
+  }
+}
+
+function scheduleMultiPaneFit(pane) {
+  window.clearTimeout(pane.fitTimer);
+  pane.fitTimer = window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
+      if (!pane.session || !pane.root.isConnected || pane.root.clientWidth === 0) return;
+      try {
+        pane.session.fit.fit();
+      } catch {
+        // Ignore fits against hidden panes.
+      }
+    });
+  }, 150);
+}
+
+function refreshMultiPanes() {
+  for (const pane of multiPanes.values()) {
+    if (!pane.session && pane.serverId) {
+      const server = state.servers.find(item => item.id === pane.serverId);
+      if (server) startMultiPaneSession(pane, server);
+    } else if (pane.session && pane.serverId) {
+      const server = state.servers.find(item => item.id === pane.serverId);
+      const title = server ? (server.name || server.host) : null;
+      if (title && pane.api && multiDock?.getPanel(pane.id)?.title !== title) {
+        pane.api.setTitle(title);
+      }
+    }
+    scheduleMultiPaneFit(pane);
+  }
+}
+
+function closeMultiPanesForServer(serverId) {
+  if (!multiDock) return;
+  for (const pane of [...multiPanes.values()]) {
+    if (pane.serverId !== serverId) continue;
+    const panel = multiDock.getPanel(pane.id);
+    if (panel) multiDock.removePanel(panel);
+  }
+  refreshMultiToolbar();
+}
+
+function createMultiWatermark() {
+  const element = document.createElement("div");
+  element.className = "multi-watermark";
+  const icon = document.createElement("div");
+  icon.className = "multi-watermark-icon";
+  icon.innerHTML = OP_ICONS.multiterm;
+  const title = document.createElement("strong");
+  title.textContent = "No terminals yet";
+  const text = document.createElement("p");
+  text.textContent = `Open up to ${MULTI_MAX_PANES} SSH terminals side by side — mix servers freely.`;
+  const button = actionButton("New terminal", "primary-button", () => addMultiPane(""));
+  element.append(icon, title, text, button);
+  return { element, init() {}, dispose() {} };
+}
+
+function createMultiGroupActions(group) {
+  const element = document.createElement("div");
+  element.className = "multi-group-actions";
+  const button = multiIconButton("Maximize pane", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>', () => {
+    if (!multiDock) return;
+    if (multiDock.hasMaximizedGroup()) {
+      multiDock.exitMaximizedGroup();
+    } else {
+      const panel = group.activePanel;
+      if (panel) multiDock.maximizeGroup(panel);
+    }
+  });
+  element.append(button);
+  let subscription = null;
+  return {
+    element,
+    init() {
+      subscription = multiDock?.onDidMaximizedGroupChange(() => {
+        const maximized = multiDock.hasMaximizedGroup();
+        button.title = maximized ? "Restore layout" : "Maximize pane";
+        button.classList.toggle("active", maximized);
+      });
+    },
+    dispose() {
+      subscription?.dispose();
+    }
+  };
+}
+
+document.addEventListener("keydown", event => {
+  if (state.activeOps !== "multiterm" || !multiDock) return;
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (!event.code.startsWith("Digit")) return;
+  const digit = Number(event.code.slice(5));
+  const index = digit === 0 ? 9 : digit - 1;
+  const panel = multiDock.panels[index];
+  if (!panel) return;
+  event.preventDefault();
+  event.stopPropagation();
+  panel.api.setActive();
+}, true);
+
 function startNewServer() {
   state.draftNew = true;
   setSelectedId(null);
@@ -1942,14 +2588,25 @@ document.addEventListener("click", event => {
     state.addMenuOpen = false;
     renderList();
   }
+  if (state.serverMenuOpenId && !event.target.closest(".server-row-menu") && !event.target.closest(".server-kebab")) {
+    state.serverMenuOpenId = null;
+    renderList();
+  }
 });
 
 elements.collapseServerRailButton.addEventListener("click", () => {
   state.serverRailCollapsed = !state.serverRailCollapsed;
+  writeStoredValue(STORAGE_KEYS.railCollapsed, state.serverRailCollapsed ? "1" : "");
   state.addMenuOpen = false;
   if (state.serverRailCollapsed) {
     state.groupCreateOpen = false;
   }
+  render();
+});
+
+elements.collapseNavButton.addEventListener("click", () => {
+  state.featureNavCollapsed = !state.featureNavCollapsed;
+  writeStoredValue(STORAGE_KEYS.navCollapsed, state.featureNavCollapsed ? "1" : "");
   render();
 });
 

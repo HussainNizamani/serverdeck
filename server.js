@@ -72,11 +72,13 @@ function sessionCookie(token) {
 const CLEAR_SESSION_COOKIE = "serverdeck_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 
 // Frontend terminal assets served from node_modules (xterm.js — the terminal
-// library used by VS Code).
+// library used by VS Code — and dockview-core for the Multi Terminals grid).
 const VENDOR_FILES = {
   "/vendor/xterm.js": path.join(ROOT, "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
   "/vendor/xterm.css": path.join(ROOT, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
-  "/vendor/addon-fit.js": path.join(ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js")
+  "/vendor/addon-fit.js": path.join(ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+  "/vendor/dockview-core.js": path.join(ROOT, "node_modules", "dockview-core", "dist", "dockview-core.min.noStyle.js"),
+  "/vendor/dockview.css": path.join(ROOT, "node_modules", "dockview-core", "dist", "styles", "dockview.css")
 };
 
 const MIME_TYPES = {
@@ -386,6 +388,39 @@ async function handleApi(req, res, url) {
       if (req.method === "DELETE" && url.pathname === `/api/servers/${serverId}`) {
         const deleted = await store.deleteServer(serverId);
         sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { error: "Server not found" });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === `/api/servers/${serverId}/duplicate`) {
+        const source = await store.getServer(serverId);
+        if (!source) {
+          sendJson(res, 404, { error: "Server not found" });
+          return;
+        }
+        // "Dubai General 1" -> "Dubai General 2"; non-numbered names get " 2".
+        const names = new Set((await store.listServers()).map(item => item.name));
+        const base = String(source.name || source.host).trim();
+        const match = base.match(/^(.*?)(\d+)$/);
+        const stem = match ? match[1] : `${base} `;
+        let next = match ? Number(match[2]) + 1 : 2;
+        let name = `${stem}${next}`;
+        while (names.has(name)) {
+          next += 1;
+          name = `${stem}${next}`;
+        }
+        const server = await store.createServer({
+          name,
+          host: source.host,
+          user: source.user,
+          port: source.port,
+          keyPath: source.keyPath,
+          bubbleLabel: source.bubbleLabel,
+          groupId: source.groupId,
+          tags: source.tags,
+          notes: source.notes,
+          passwordEnc: source.passwordEnc || ""
+        });
+        sendJson(res, 201, { server: sanitizeServer(server) });
         return;
       }
 

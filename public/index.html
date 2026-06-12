@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/vendor/xterm.css">
+    <link rel="stylesheet" href="/vendor/dockview.css">
     <link rel="stylesheet" href="/styles.css">
     <script>
       try {
@@ -30,6 +31,9 @@
             <span class="brand-name">Server Deck</span>
             <span class="brand-tag">Control panel</span>
           </div>
+          <button class="nav-toggle" id="collapseNavButton" title="Collapse menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
         </div>
         <nav id="opsTabs" class="sidebar-tabs"></nav>
       </aside>
@@ -247,6 +251,7 @@
     <div id="toast" class="toast" hidden></div>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>
+    <script src="/vendor/dockview-core.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

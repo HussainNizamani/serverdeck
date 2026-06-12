@@ -22,7 +22,19 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
   and search. Selected server and tab survive page reloads.
 - **Real web terminal** — xterm.js (the terminal VS Code uses) connected to an
   ssh2 shell over WebSocket. Full ANSI colors, cursor handling, `vim`/`htop`,
-  auto-resize, and multiple tabbed sessions per server.
+  and auto-resize.
+- **Multi-terminal grid** — open up to 10 terminals side by side in a
+  resizable, drag-to-rearrange grid (dockview-core). Mix servers freely,
+  color-coded per server, maximize any pane, Alt+1–9 to jump, one-click
+  reconnect, and the layout survives reloads. A focus mode collapses both
+  side menus for maximum terminal space.
+- **Broadcast input** — send a command to every marked terminal at once via a
+  line-buffered command bar (nothing is sent until Enter), or mirror raw
+  keystrokes tmux-style with "Live keys". Receiving panes show an unmissable
+  red striped warning, and any pane can be excluded.
+- **Duplicate servers** — clone a full server profile (key, encrypted
+  password, group, tags, notes) from the three-dot menu on any server row,
+  with auto-incremented naming.
 - **SFTP file manager** — browse with breadcrumbs, upload, download, rename,
   delete, and create folders over the same SSH connection.
 - **Operation panels** — overview, services (start/stop/restart/reload/
