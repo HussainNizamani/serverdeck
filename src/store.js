@@ -46,6 +46,9 @@ function normalizeServerInput(input = {}, previous = {}) {
   const host = String(input.host ?? previous.host ?? "").trim();
   const user = String(input.user ?? previous.user ?? "root").trim();
   const port = Number(input.port ?? previous.port ?? 22);
+  // keyPath holds one or more key paths, newline-separated (see splitKeyPaths
+  // in src/ssh.js). normalizeFilePath only trims/unquotes the outer string,
+  // which leaves a multi-line value intact.
   const keyPath = normalizeFilePath(input.keyPath ?? previous.keyPath ?? "");
   const bubbleLabel = normalizeBubbleLabel(input.bubbleLabel ?? previous.bubbleLabel ?? "");
   const groupId = String(input.groupId ?? previous.groupId ?? "").trim();

@@ -1852,6 +1852,123 @@ textarea {
 }
 
 /* ============================================================
+   SSH key management
+   ============================================================ */
+
+.key-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.key-list-item {
+  align-items: center;
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 12px;
+}
+
+.key-list-item.selectable {
+  cursor: pointer;
+}
+
+.key-list-item.selectable:hover {
+  border-color: var(--accent);
+}
+
+.key-list-item.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+}
+
+.key-list-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.key-list-right {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.key-tick {
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.key-list-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.key-list-meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.key-list-empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  list-style: none;
+  padding: 4px 0;
+}
+
+.key-delete {
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.key-delete:hover {
+  background: var(--danger-soft);
+}
+
+.key-upload-warning {
+  background: var(--danger-soft);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--text, inherit);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+  padding: 11px 13px;
+}
+
+.key-upload-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ============================================================
    Multi Terminals (dockview grid)
    ============================================================ */
 

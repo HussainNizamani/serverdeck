@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -11,6 +12,15 @@ function expandHome(filePath) {
   if (trimmed === "~") return os.homedir();
   if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
   return trimmed;
+}
+
+// A server may reference several keys. They are stored in the single keyPath
+// field, newline-separated, so storage stays a plain string.
+function splitKeyPaths(keyPath) {
+  return String(keyPath || "")
+    .split("\n")
+    .map(entry => entry.trim())
+    .filter(Boolean);
 }
 
 function pathRemaps() {
@@ -38,23 +48,18 @@ function remapKeyPath(filePath) {
   return filePath;
 }
 
-function keySearchDirs() {
-  const configured = String(process.env.SERVERDECK_KEY_DIRS || "")
-    .split(":")
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  const remappedTargets = pathRemaps().map(remap => remap.to);
-  const defaults = [path.join(os.homedir(), ".ssh"), "/keys"];
-  return [...new Set([...configured, ...remappedTargets, ...defaults].map(expandHome))];
-}
-
-function looksLikePrivateKey(filePath, stat) {
-  const base = path.basename(filePath);
-  if (stat.isDirectory()) return false;
+// Whether a bare filename is one the key discovery scan will surface. Shared
+// with the upload handler so uploaded keys are guaranteed to be discoverable.
+function looksLikeKeyFilename(base) {
   if (base.endsWith(".pub") || base === "known_hosts" || base === "authorized_keys" || base === "config") return false;
   if (/\.(pem|key|ppk)$/i.test(base)) return true;
   if (/^id_(rsa|ed25519|ecdsa|dsa)$/i.test(base)) return true;
   return false;
+}
+
+function looksLikePrivateKey(filePath, stat) {
+  if (stat.isDirectory()) return false;
+  return looksLikeKeyFilename(path.basename(filePath));
 }
 
 function listSshKeys() {
@@ -96,11 +101,97 @@ function listSshKeys() {
     }
   }
 
-  for (const dir of keySearchDirs()) {
-    visit(dir);
-  }
+  // Strictly one directory: the single shared keys folder. Nothing else (no
+  // ~/.ssh, no extra search paths) is ever scanned.
+  visit(keyUploadDir());
 
   return keys.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+// THE keys directory — the one and only folder Server Deck reads keys from and
+// writes uploads to. Shared host<->container via the bind mount. Permissions
+// are enforced on the whole folder regardless of who created a file (see
+// enforceKeyPerms). There is no second location.
+function keyUploadDir() {
+  return expandHome(process.env.SERVERDECK_KEY_UPLOAD_DIR || "/keys");
+}
+
+const RESERVED_KEY_NAMES = new Set(["config", "known_hosts", "authorized_keys"]);
+
+// Reduces an uploaded filename to a single safe basename. Throws (statusCode
+// 400) on traversal attempts, disallowed characters, or reserved/public-key
+// names so callers can surface a clean error.
+function sanitizeKeyName(rawName) {
+  const base = path.basename(String(rawName || "").trim());
+  if (!base || base === "." || base === "..") {
+    throw Object.assign(new Error("A key filename is required."), { statusCode: 400 });
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(base)) {
+    throw Object.assign(
+      new Error("Key filename may only contain letters, numbers, dots, dashes and underscores."),
+      { statusCode: 400 }
+    );
+  }
+  if (base.endsWith(".pub") || RESERVED_KEY_NAMES.has(base)) {
+    throw Object.assign(new Error(`"${base}" is not a private key filename.`), { statusCode: 400 });
+  }
+  return base;
+}
+
+// Confirms uploaded content is actually a private key (not an arbitrary text
+// file) before it touches disk. Encrypted keys can't be parsed without their
+// passphrase, so a valid PEM/OpenSSH envelope is accepted even when parsing
+// fails for a passphrase reason.
+function validatePrivateKey(content) {
+  const text = String(content || "").trim();
+  if (!text) return { ok: false, reason: "The uploaded file is empty." };
+  if (/^PuTTY-User-Key-File-/m.test(text)) return { ok: true, type: "ppk" };
+
+  const hasEnvelope =
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(text) &&
+    /-----END [A-Z0-9 ]*PRIVATE KEY-----/.test(text);
+  if (!hasEnvelope) {
+    return { ok: false, reason: "Not a recognized private key (missing a PEM/OpenSSH header)." };
+  }
+
+  try {
+    crypto.createPrivateKey(text);
+    return { ok: true, type: "openssh" };
+  } catch (err) {
+    const passphraseProtected =
+      err.code === "ERR_MISSING_PASSPHRASE" ||
+      /passphrase|bad decrypt/i.test(err.message || "") ||
+      /ENCRYPTED/.test(text) ||
+      /-----BEGIN OPENSSH PRIVATE KEY-----/.test(text);
+    if (passphraseProtected) return { ok: true, type: "openssh", encrypted: true };
+    return { ok: false, reason: "The file looks like a key but could not be parsed." };
+  }
+}
+
+// Locks down the key folder: 0700 on the directory, 0600 on every private key
+// inside it. Best-effort — a file the process cannot chmod (wrong owner) is
+// skipped rather than failing the whole sweep. Run after every upload/delete;
+// the container entrypoint runs the equivalent (as root) at boot.
+function enforceKeyPerms(dir = keyUploadDir()) {
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // Directory may not exist yet or may be owned by another user.
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name.endsWith(".pub")) continue;
+    try {
+      fs.chmodSync(path.join(dir, entry.name), 0o600);
+    } catch {
+      // Best effort — skip files this process does not own.
+    }
+  }
 }
 
 function hasPuttygen() {
@@ -178,8 +269,30 @@ function resolveIdentity(server) {
   };
 }
 
+// Resolves every key path on a server into combined ssh `-i` arguments, with a
+// single cleanup that tears down any temporary PPK conversions.
+function resolveIdentities(server) {
+  const paths = splitKeyPaths(server.keyPath);
+  if (!paths.length) return { args: [], cleanup: noop };
+
+  const args = [];
+  const cleanups = [];
+  const cleanup = () => cleanups.forEach(fn => fn());
+  for (const keyPath of paths) {
+    const identity = resolveIdentity({ keyPath });
+    if (identity.error) {
+      identity.cleanup();
+      cleanup();
+      return { args: [], cleanup: noop, error: identity.error };
+    }
+    args.push(...identity.args);
+    cleanups.push(identity.cleanup);
+  }
+  return { args, cleanup };
+}
+
 function buildSshArgs(server, options = {}) {
-  const identity = resolveIdentity(server);
+  const identity = resolveIdentities(server);
   if (identity.error) {
     return { args: [], cleanup: identity.cleanup, error: identity.error };
   }
@@ -285,11 +398,18 @@ function runSsh(server, command, options = {}) {
 
 module.exports = {
   buildSshArgs,
+  enforceKeyPerms,
   expandHome,
   hasPuttygen,
+  keyUploadDir,
   listSshKeys,
+  looksLikeKeyFilename,
   remapKeyPath,
   resolveIdentity,
+  resolveIdentities,
   runSsh,
-  spawnSsh
+  sanitizeKeyName,
+  splitKeyPaths,
+  spawnSsh,
+  validatePrivateKey
 };

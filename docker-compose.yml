@@ -23,12 +23,22 @@ services:
       HOST: 0.0.0.0
       PORT: 8787
       DATABASE_URL: postgres://serverdeck:${SERVERDECK_DB_PASSWORD:-serverdeck}@postgres:5432/serverdeck
-      # Folders inside the container that are scanned for SSH private keys.
-      SERVERDECK_KEY_DIRS: /keys:/home/node/.ssh
+      # THE single keys directory inside the container — the host folder below
+      # is mounted here. It is the ONLY place keys are read from and where web
+      # uploads land. Nothing else (no ~/.ssh, no extra dirs) is scanned.
+      SERVERDECK_KEY_UPLOAD_DIR: ${SERVERDECK_KEY_UPLOAD_DIR:-/keys}
+      # Host-side path of that same folder, so the UI's "Open folder" button can
+      # build an sftp:// link your desktop file manager can open.
+      SERVERDECK_KEY_HOST_DIR: ${SERVERDECK_KEY_DIR:-./keys}
       # Remaps key paths saved in the UI to their in-container mount.
       # Example: /home/me/.ssh=/keys means a server saved with the key
       # /home/me/.ssh/id_ed25519 resolves to /keys/id_ed25519 in the container.
       SERVERDECK_KEY_PATH_REMAPS: ${SERVERDECK_KEY_PATH_REMAPS:-}
+      # Host UID/GID the container should own the shared keys folder as, so the
+      # same files are readable/manageable from your host terminal. Set these
+      # in .env to `id -u` / `id -g` if your user isn't 1000.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       # Source networks allowed to reach the panel (comma-separated CIDRs).
       # Default: loopback, Tailscale CGNAT (100.64.0.0/10), and private
       # ranges (private ranges are required because Docker NAT rewrites the
@@ -47,9 +57,12 @@ services:
       - "127.0.0.1:8787:8787"
       - "${SERVERDECK_TAILSCALE_IP:-127.0.0.2}:8787:8787"
     volumes:
-      # Host folder with your SSH private keys, mounted read-only at /keys.
+      # Host folder with your SSH private keys, mounted read-write at /keys so
+      # web uploads can be written and permissions enforced. Manage the same
+      # keys from your terminal in this folder. Recommended host path:
+      # SERVERDECK_KEY_DIR=$HOME/.serverdeck/keys (see .env.example).
       # The :z suffix relabels the folder on SELinux systems (Fedora/RHEL).
-      - ${SERVERDECK_KEY_DIR:-./keys}:/keys:ro,z
+      - ${SERVERDECK_KEY_DIR:-./keys}:/keys:rw,z
     depends_on:
       postgres:
         condition: service_healthy
