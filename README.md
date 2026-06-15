@@ -50,10 +50,13 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
 - **Private by design** — the Docker port binds to localhost and your
   Tailscale IP only (never `0.0.0.0`), and the app itself rejects requests
   from non-allowlisted source networks.
-- **SSH key flexibility** — OpenSSH keys, PuTTY `.ppk` keys (converted
-  in-memory via `puttygen`), key discovery from a shared folder, web upload as
-  a fallback, automatic permission enforcement, and path remapping between host
-  and container.
+- **SSH keys, managed from the UI** — keep keys in one shared folder, then pick
+  one or several per server by ticking them (Server Deck tries each until one
+  authenticates). Upload keys from the browser (validated, gated behind a
+  warning), browse/download/rename/delete them in an in-app file manager, and
+  let the panel enforce `0700`/`0600` permissions automatically. OpenSSH and
+  PuTTY `.ppk` keys (converted in-memory via `puttygen`) are both supported,
+  with path remapping between host and container.
 - **Theming** — dark/light mode and five accent colors.
 
 ## Requirements
