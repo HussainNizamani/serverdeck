@@ -3,7 +3,15 @@ const http = require("node:http");
 const path = require("node:path");
 const { createStore } = require("./src/store");
 const { createPostgresStore } = require("./src/postgres-store");
-const { hasPuttygen, listSshKeys } = require("./src/ssh");
+const {
+  hasPuttygen,
+  listSshKeys,
+  keyUploadDir,
+  enforceKeyPerms,
+  sanitizeKeyName,
+  validatePrivateKey,
+  looksLikeKeyFilename
+} = require("./src/ssh");
 const ssh2 = require("./src/ssh2-client");
 const { TASKS, runServerTask } = require("./src/tasks");
 const { acceptWebSocket } = require("./src/ws");
@@ -323,8 +331,85 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/ssh-keys") {
       sendJson(res, 200, {
         keys: listSshKeys(),
-        defaultLocations: ["~/.ssh", "/keys"]
+        uploadDir: keyUploadDir(),
+        // Host-side path of the shared folder (for the "Open folder" sftp:// link).
+        // Falls back to the container path for bare-metal runs where they match.
+        hostDir: process.env.SERVERDECK_KEY_HOST_DIR || keyUploadDir()
       });
+      return;
+    }
+
+    // Web upload of a private key. The key lands as a 0600 file in the shared
+    // upload folder and is then discoverable via GET /api/ssh-keys — no
+    // encryption or connection-code changes; it flows through the existing
+    // keyPath path. Gated behind an SFTP-first warning in the UI.
+    if (req.method === "POST" && url.pathname === "/api/ssh-keys") {
+      const body = await readJson(req, 256 * 1024);
+      let safeName = sanitizeKeyName(body.filename);
+      const validation = validatePrivateKey(body.content);
+      if (!validation.ok) {
+        sendJson(res, 400, { error: validation.reason });
+        return;
+      }
+      // Ensure the saved name is one the discovery scan will surface, so the
+      // uploaded key actually shows up in the dropdown.
+      if (!looksLikeKeyFilename(safeName)) safeName += ".key";
+      const dir = keyUploadDir();
+      const dest = path.join(dir, safeName);
+      const relative = path.relative(dir, dest);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        sendJson(res, 400, { error: "Invalid key filename." });
+        return;
+      }
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch {
+        // Directory already exists or is provided by the bind mount.
+      }
+      if (fs.existsSync(dest)) {
+        sendJson(res, 409, { error: `A key named "${safeName}" already exists.` });
+        return;
+      }
+      fs.writeFileSync(dest, String(body.content), { mode: 0o600 });
+      enforceKeyPerms(dir);
+      sendJson(res, 201, { ok: true, name: safeName, keys: listSshKeys() });
+      return;
+    }
+
+    const sshKeyName = parseServerIdFromPath(url.pathname, "/api/ssh-keys/");
+    if (sshKeyName && req.method === "DELETE") {
+      const safeName = sanitizeKeyName(decodeURIComponent(sshKeyName));
+      const dir = keyUploadDir();
+      const target = path.join(dir, safeName);
+      const relative = path.relative(dir, target);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        sendJson(res, 400, { error: "Invalid key filename." });
+        return;
+      }
+      if (!fs.existsSync(target)) {
+        sendJson(res, 404, { error: "Key not found." });
+        return;
+      }
+      // Refuse to orphan a server that still references this key.
+      const inUse = (await store.listServers()).filter(
+        item => path.basename(String(item.keyPath || "")) === safeName
+      );
+      if (inUse.length) {
+        const names = inUse.map(item => item.name || item.host).join(", ");
+        sendJson(res, 409, {
+          error: `Key is in use by ${inUse.length} server${inUse.length === 1 ? "" : "s"} (${names}). Reassign them first.`
+        });
+        return;
+      }
+      fs.unlinkSync(target);
+      enforceKeyPerms(dir);
+      sendJson(res, 200, { ok: true, keys: listSshKeys() });
+      return;
+    }
+
+    const keyFilesMatch = url.pathname.match(/^\/api\/key-files\/(list|download|upload|rename|delete)$/);
+    if (keyFilesMatch) {
+      await handleKeyFilesApi(req, res, url, keyFilesMatch[1]);
       return;
     }
 
@@ -651,6 +736,164 @@ async function handleSftpApi(req, res, url, serverId, op) {
   if (op === "delete" && req.method === "POST") {
     const body = await readJson(req);
     await ssh2.withSftp(server, sftp => ssh2.sftpDelete(sftp, cleanRemotePath(body.path), Boolean(body.isDir)));
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  sendJson(res, 404, { error: "Not found" });
+}
+
+/* ---------- Keys folder file manager (local filesystem) ---------- */
+
+// Resolves a UI path (relative to the keys folder root, where "/" is the folder
+// itself) to an absolute path, refusing anything that escapes the folder.
+function resolveKeyFilePath(rawPath) {
+  const dir = keyUploadDir();
+  const rel = cleanRemotePath(rawPath).replace(/^\/+/, "");
+  const target = path.resolve(dir, rel);
+  if (target !== dir && !target.startsWith(dir + path.sep)) {
+    throw Object.assign(new Error("Path is outside the keys folder."), { statusCode: 400 });
+  }
+  return { dir, target, displayPath: rel ? `/${rel}` : "/" };
+}
+
+async function keyInUse(name) {
+  return (await store.listServers()).filter(item => path.basename(String(item.keyPath || "")) === name);
+}
+
+async function handleKeyFilesApi(req, res, url, op) {
+  const dir = keyUploadDir();
+
+  if (op === "list" && req.method === "GET") {
+    const { target, displayPath } = resolveKeyFilePath(url.searchParams.get("path"));
+    let dirents;
+    try {
+      dirents = fs.readdirSync(target, { withFileTypes: true });
+    } catch {
+      sendJson(res, 404, { error: "Folder not found." });
+      return;
+    }
+    const entries = dirents
+      .filter(entry => !entry.name.startsWith("."))
+      .map(entry => {
+        const full = path.join(target, entry.name);
+        let stat;
+        try {
+          stat = fs.lstatSync(full);
+        } catch {
+          return null;
+        }
+        const isLink = stat.isSymbolicLink();
+        if (isLink) {
+          try { stat = fs.statSync(full); } catch { /* dangling symlink */ }
+        }
+        const isDir = stat.isDirectory();
+        return {
+          name: entry.name,
+          size: isDir ? 0 : stat.size,
+          modifiedAt: stat.mtime ? stat.mtime.toISOString() : null,
+          isDir,
+          isLink
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name));
+    sendJson(res, 200, { path: displayPath, entries });
+    return;
+  }
+
+  if (op === "download" && req.method === "GET") {
+    const { target } = resolveKeyFilePath(url.searchParams.get("path"));
+    let stat;
+    try {
+      stat = fs.statSync(target);
+    } catch {
+      sendJson(res, 404, { error: "File not found." });
+      return;
+    }
+    if (stat.isDirectory()) {
+      sendJson(res, 400, { error: "Cannot download a directory." });
+      return;
+    }
+    const fileName = path.basename(target);
+    res.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": stat.size,
+      "Content-Disposition": `attachment; filename="${fileName.replace(/["\\]/g, "_")}"`,
+      "Cache-Control": "no-store"
+    });
+    fs.createReadStream(target).pipe(res);
+    return;
+  }
+
+  if (op === "upload" && req.method === "POST") {
+    const { target } = resolveKeyFilePath(url.searchParams.get("path"));
+    const raw = await readBody(req, 256 * 1024);
+    const validation = validatePrivateKey(raw);
+    if (!validation.ok) {
+      sendJson(res, 400, { error: validation.reason });
+      return;
+    }
+    let safeName = sanitizeKeyName(path.basename(target));
+    if (!looksLikeKeyFilename(safeName)) safeName += ".key";
+    const dest = path.join(path.dirname(target), safeName);
+    if (fs.existsSync(dest)) {
+      sendJson(res, 409, { error: `A key named "${safeName}" already exists.` });
+      return;
+    }
+    fs.writeFileSync(dest, raw, { mode: 0o600 });
+    enforceKeyPerms(dir);
+    sendJson(res, 201, { ok: true, name: safeName });
+    return;
+  }
+
+  if (op === "rename" && req.method === "POST") {
+    const body = await readJson(req);
+    const { target: from } = resolveKeyFilePath(body.from);
+    if (!fs.existsSync(from)) {
+      sendJson(res, 404, { error: "File not found." });
+      return;
+    }
+    const inUse = await keyInUse(path.basename(from));
+    if (inUse.length) {
+      sendJson(res, 409, {
+        error: `Key is in use by ${inUse.length} server${inUse.length === 1 ? "" : "s"}; reassign them before renaming.`
+      });
+      return;
+    }
+    const safeName = sanitizeKeyName(path.basename(cleanRemotePath(body.to)));
+    const dest = path.join(path.dirname(from), safeName);
+    if (fs.existsSync(dest) && dest !== from) {
+      sendJson(res, 409, { error: `A key named "${safeName}" already exists.` });
+      return;
+    }
+    fs.renameSync(from, dest);
+    enforceKeyPerms(dir);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (op === "delete" && req.method === "POST") {
+    const body = await readJson(req);
+    const { target } = resolveKeyFilePath(body.path);
+    if (!fs.existsSync(target)) {
+      sendJson(res, 404, { error: "File not found." });
+      return;
+    }
+    const isDir = fs.statSync(target).isDirectory();
+    if (!isDir) {
+      const inUse = await keyInUse(path.basename(target));
+      if (inUse.length) {
+        const names = inUse.map(item => item.name || item.host).join(", ");
+        sendJson(res, 409, {
+          error: `Key is in use by ${inUse.length} server${inUse.length === 1 ? "" : "s"} (${names}). Reassign them first.`
+        });
+        return;
+      }
+    }
+    if (isDir) fs.rmdirSync(target);
+    else fs.unlinkSync(target);
+    enforceKeyPerms(dir);
     sendJson(res, 200, { ok: true });
     return;
   }

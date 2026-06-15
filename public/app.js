@@ -96,6 +96,11 @@ const state = {
   activeTerminalId: null,
   config: null,
   sshKeys: [],
+  keyUploadDir: "/keys",
+  keyHostDir: "/keys",
+  draftKeyPaths: [],
+  settingsBaseline: null,
+  pendingNavigation: null,
   activeOps: initialActiveOps(),
   opsOutputs: {},
   busyKeys: {},
@@ -134,8 +139,6 @@ const elements = {
   serverPort: document.querySelector("#serverPort"),
   serverBubbleLabel: document.querySelector("#serverBubbleLabel"),
   serverGroup: document.querySelector("#serverGroup"),
-  serverKeySelect: document.querySelector("#serverKeySelect"),
-  serverKeyPath: document.querySelector("#serverKeyPath"),
   serverPassword: document.querySelector("#serverPassword"),
   serverPasswordClear: document.querySelector("#serverPasswordClear"),
   clearPasswordRow: document.querySelector("#clearPasswordRow"),
@@ -149,6 +152,18 @@ const elements = {
   metricLastReport: document.querySelector("#metricLastReport"),
   installCommand: document.querySelector("#installCommand"),
   copyInstallButton: document.querySelector("#copyInstallButton"),
+  uploadKeyButton: document.querySelector("#uploadKeyButton"),
+  openKeyFolderButton: document.querySelector("#openKeyFolderButton"),
+  keyList: document.querySelector("#keyList"),
+  keyUploadOverlay: document.querySelector("#keyUploadOverlay"),
+  keyFileInput: document.querySelector("#keyFileInput"),
+  keyUploadError: document.querySelector("#keyUploadError"),
+  keyUploadCancel: document.querySelector("#keyUploadCancel"),
+  keyUploadConfirm: document.querySelector("#keyUploadConfirm"),
+  unsavedOverlay: document.querySelector("#unsavedOverlay"),
+  unsavedSave: document.querySelector("#unsavedSave"),
+  unsavedDiscard: document.querySelector("#unsavedDiscard"),
+  unsavedCancel: document.querySelector("#unsavedCancel"),
   opsTabs: document.querySelector("#opsTabs"),
   toast: document.querySelector("#toast"),
   authOverlay: document.querySelector("#authOverlay"),
@@ -394,7 +409,6 @@ function setBusy(serverId, task, value) {
 }
 
 function formValue() {
-  const selectedKey = elements.serverKeySelect.value;
   const payload = {
     name: elements.serverName.value.trim(),
     host: elements.serverHost.value.trim(),
@@ -402,7 +416,9 @@ function formValue() {
     port: Number(elements.serverPort.value || 22),
     bubbleLabel: elements.serverBubbleLabel.value.trim().replace(/\s+/g, "").toUpperCase().slice(0, 3),
     groupId: elements.serverGroup.value,
-    keyPath: selectedKey === "__custom__" ? elements.serverKeyPath.value.trim() : selectedKey,
+    // Selected keys (chosen by ticking them in the SSH keys list) are stored
+    // newline-separated in the single keyPath field.
+    keyPath: state.draftKeyPaths.join("\n"),
     tags: elements.serverTags.value,
     notes: elements.serverNotes.value
   };
@@ -415,33 +431,219 @@ function formValue() {
   return payload;
 }
 
-function renderKeyOptions(selectedKeyPath = "") {
-  elements.serverKeySelect.innerHTML = "";
+// True when the server-settings form is the active view.
+function isSettingsView() {
+  return state.activeOps === "settings" || state.draftNew;
+}
 
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = "Default SSH auth";
-  elements.serverKeySelect.append(defaultOption);
+// A stable fingerprint of every editable settings field, used to detect
+// unsaved changes against the baseline captured when the form was loaded.
+function settingsSnapshot() {
+  return JSON.stringify({
+    name: elements.serverName.value,
+    host: elements.serverHost.value,
+    user: elements.serverUser.value,
+    port: elements.serverPort.value,
+    bubbleLabel: elements.serverBubbleLabel.value,
+    groupId: elements.serverGroup.value,
+    tags: elements.serverTags.value,
+    notes: elements.serverNotes.value,
+    password: elements.serverPassword.value,
+    passwordClear: elements.serverPasswordClear.checked,
+    keyPaths: [...state.draftKeyPaths].sort()
+  });
+}
 
-  for (const key of state.sshKeys) {
-    const option = document.createElement("option");
-    option.value = key.path;
-    option.textContent = `${key.name} · ${key.path}`;
-    elements.serverKeySelect.append(option);
+function isSettingsDirty() {
+  return isSettingsView() && state.settingsBaseline !== null && settingsSnapshot() !== state.settingsBaseline;
+}
+
+// Runs `proceed` unless the settings form has unsaved edits, in which case it
+// opens the save/discard/cancel dialog and defers the navigation.
+function guardUnsaved(proceed) {
+  if (!isSettingsDirty()) {
+    proceed();
+    return;
+  }
+  state.pendingNavigation = proceed;
+  elements.unsavedOverlay.hidden = false;
+}
+
+function closeUnsavedDialog() {
+  elements.unsavedOverlay.hidden = true;
+  state.pendingNavigation = null;
+}
+
+function runPendingNavigation() {
+  const proceed = state.pendingNavigation;
+  state.pendingNavigation = null;
+  elements.unsavedOverlay.hidden = true;
+  if (proceed) proceed();
+}
+
+// Mirror of src/ssh.js splitKeyPaths: keys are stored newline-separated.
+function splitKeyPaths(keyPath) {
+  return String(keyPath || "")
+    .split("\n")
+    .map(entry => entry.trim())
+    .filter(Boolean);
+}
+
+// Only keys living in the shared upload folder can be deleted from the UI.
+function isManagedKey(key) {
+  const dir = state.keyUploadDir || "/keys";
+  return key.path === `${dir}/${key.name}` || key.path.startsWith(`${dir}/`);
+}
+
+function toggleKeySelection(keyPath) {
+  const index = state.draftKeyPaths.indexOf(keyPath);
+  if (index === -1) state.draftKeyPaths.push(keyPath);
+  else state.draftKeyPaths.splice(index, 1);
+  renderKeyList();
+}
+
+function renderKeyList() {
+  if (!elements.keyList) return;
+  elements.keyList.innerHTML = "";
+
+  if (!state.sshKeys.length) {
+    const empty = document.createElement("li");
+    empty.className = "key-list-empty";
+    empty.textContent = "No keys yet — upload one or drop it in the shared folder.";
+    elements.keyList.append(empty);
+    return;
   }
 
-  const customOption = document.createElement("option");
-  customOption.value = "__custom__";
-  customOption.textContent = "Custom path...";
-  elements.serverKeySelect.append(customOption);
+  const canEdit = state.draftNew || Boolean(selectedServer());
 
-  const hasDiscoveredKey = state.sshKeys.some(key => key.path === selectedKeyPath);
-  elements.serverKeySelect.value = selectedKeyPath && hasDiscoveredKey ? selectedKeyPath : selectedKeyPath ? "__custom__" : "";
-  elements.serverKeyPath.hidden = elements.serverKeySelect.value !== "__custom__";
-  elements.serverKeyPath.value = selectedKeyPath && !hasDiscoveredKey ? selectedKeyPath : "";
+  for (const key of state.sshKeys) {
+    const selected = state.draftKeyPaths.includes(key.path);
+    const item = document.createElement("li");
+    item.className = `key-list-item ${selected ? "selected" : ""} ${canEdit ? "selectable" : ""}`;
+    item.setAttribute("role", "button");
+    item.setAttribute("aria-pressed", selected ? "true" : "false");
+
+    const info = document.createElement("div");
+    info.className = "key-list-info";
+    const name = document.createElement("span");
+    name.className = "key-list-name";
+    name.textContent = key.name;
+    const meta = document.createElement("span");
+    meta.className = "key-list-meta";
+    meta.textContent = `${key.type === "ppk" ? "PuTTY" : "OpenSSH"} · ${key.path}`;
+    info.append(name, meta);
+    item.append(info);
+
+    const right = document.createElement("div");
+    right.className = "key-list-right";
+    const tick = document.createElement("span");
+    tick.className = "key-tick";
+    tick.textContent = "✓";
+    tick.hidden = !selected;
+    tick.title = "Selected for this server";
+    right.append(tick);
+
+    if (isManagedKey(key)) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "key-delete";
+      remove.textContent = "Delete";
+      // Don't let a delete click also toggle the row's selection.
+      remove.addEventListener("click", event => {
+        event.stopPropagation();
+        deleteSshKey(key.name, key.path);
+      });
+      right.append(remove);
+    }
+    item.append(right);
+
+    // The whole row toggles selection for this server.
+    if (canEdit) {
+      item.addEventListener("click", () => toggleKeySelection(key.path));
+    }
+
+    elements.keyList.append(item);
+  }
+}
+
+async function deleteSshKey(name, keyPath) {
+  if (!window.confirm(`Delete the key "${name}" from the shared folder? This cannot be undone.`)) {
+    return;
+  }
+  try {
+    const response = await api(`/api/ssh-keys/${encodeURIComponent(name)}`, { method: "DELETE" });
+    state.sshKeys = response.keys || [];
+    state.draftKeyPaths = state.draftKeyPaths.filter(path => path !== keyPath);
+    showToast(`Deleted "${name}".`);
+    renderKeyList();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+// Opens the in-app file browser for the shared keys folder (a "Files session"
+// scoped to that one directory — no SSH/FTP needed since the folder is local).
+function openKeyFolder() {
+  const fm = sftpStateFor(KEY_FILES_SOURCE.id);
+  fm.started = false;
+  fm.path = "/";
+  fm.entries = null;
+  state.activeOps = "key-files";
+  render();
+}
+
+function openKeyUpload() {
+  elements.keyFileInput.value = "";
+  elements.keyUploadError.hidden = true;
+  elements.keyUploadError.textContent = "";
+  elements.keyUploadOverlay.hidden = false;
+}
+
+function closeKeyUpload() {
+  elements.keyUploadOverlay.hidden = true;
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read the selected file."));
+    reader.readAsText(file);
+  });
+}
+
+async function confirmKeyUpload() {
+  const file = elements.keyFileInput.files[0];
+  if (!file) {
+    elements.keyUploadError.textContent = "Choose a private key file first.";
+    elements.keyUploadError.hidden = false;
+    return;
+  }
+  if (file.size > 256 * 1024) {
+    elements.keyUploadError.textContent = "That file is too large to be a private key.";
+    elements.keyUploadError.hidden = false;
+    return;
+  }
+  try {
+    const content = await readFileAsText(file);
+    const response = await api("/api/ssh-keys", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, content })
+    });
+    state.sshKeys = response.keys || [];
+    closeKeyUpload();
+    showToast(`Uploaded "${response.name}".`);
+    renderKeyList();
+  } catch (error) {
+    elements.keyUploadError.textContent = error.message;
+    elements.keyUploadError.hidden = false;
+  }
 }
 
 function fillForm(server) {
+  // Preserve unsaved edits when a re-render happens mid-edit (e.g. collapsing
+  // the sidebar). Navigation is handled separately by the unsaved-changes guard.
+  if (isSettingsDirty()) return;
   const canEdit = state.draftNew || Boolean(server);
   for (const input of [
     elements.serverName,
@@ -450,8 +652,6 @@ function fillForm(server) {
     elements.serverPort,
     elements.serverBubbleLabel,
     elements.serverGroup,
-    elements.serverKeySelect,
-    elements.serverKeyPath,
     elements.serverPassword,
     elements.serverPasswordClear,
     elements.serverTags,
@@ -468,7 +668,8 @@ function fillForm(server) {
   elements.serverPort.value = server?.port || 22;
   elements.serverBubbleLabel.value = server?.bubbleLabel || "";
   renderGroupOptions(server?.groupId || "");
-  renderKeyOptions(server?.keyPath || "");
+  state.draftKeyPaths = splitKeyPaths(server?.keyPath || "");
+  renderKeyList();
   elements.serverPassword.value = "";
   elements.serverPassword.placeholder = server?.hasPassword
     ? "•••••• saved — leave empty to keep it"
@@ -478,6 +679,8 @@ function fillForm(server) {
   elements.serverTags.value = (server?.tags || []).join(", ");
   elements.serverNotes.value = server?.notes || "";
   elements.installCommand.textContent = installCommand(server);
+  // Reset the unsaved-changes baseline to the freshly loaded values.
+  state.settingsBaseline = settingsSnapshot();
 }
 
 function metricBlock(label, value) {
@@ -597,11 +800,14 @@ function renderOpsTabs() {
       tabLabel.textContent = op.label;
       button.append(tabLabel);
       button.addEventListener("click", () => {
-        setActiveOps(op.id);
-        if (op.id === "settings") {
-          state.draftNew = false;
-        }
-        render();
+        if (op.id === state.activeOps && !state.draftNew) return;
+        guardUnsaved(() => {
+          setActiveOps(op.id);
+          if (op.id === "settings") {
+            state.draftNew = false;
+          }
+          render();
+        });
       });
       elements.opsTabs.append(button);
     }
@@ -697,11 +903,19 @@ function renderServerSelector(server) {
   button.className = `server-selector ${selected ? "selected" : ""}`;
   button.title = `${server.name} · ${server.user}@${server.host}:${server.port}`;
   button.addEventListener("click", () => {
-    setSelectedId(server.id);
-    state.draftNew = false;
-    state.addMenuOpen = false;
-    state.groupCreateOpen = false;
-    render();
+    if (server.id === state.selectedId && !state.draftNew) {
+      state.addMenuOpen = false;
+      state.groupCreateOpen = false;
+      render();
+      return;
+    }
+    guardUnsaved(() => {
+      setSelectedId(server.id);
+      state.draftNew = false;
+      state.addMenuOpen = false;
+      state.groupCreateOpen = false;
+      render();
+    });
   });
 
   const bubble = document.createElement("span");
@@ -746,7 +960,7 @@ function renderServerSelector(server) {
   duplicate.type = "button";
   duplicate.setAttribute("role", "menuitem");
   duplicate.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Duplicate';
-  duplicate.addEventListener("click", () => duplicateServer(server.id));
+  duplicate.addEventListener("click", () => guardUnsaved(() => duplicateServer(server.id)));
   menu.append(duplicate);
   row.append(button, menu);
   return row;
@@ -810,7 +1024,8 @@ function renderDetails() {
   }
 
   const authParts = [];
-  if (server.keyPath) authParts.push(`key ${server.keyPath.endsWith(".ppk") ? "PPK" : "file"}`);
+  const keyCount = splitKeyPaths(server.keyPath).length;
+  if (keyCount) authParts.push(keyCount === 1 ? "1 key" : `${keyCount} keys`);
   if (server.hasPassword) authParts.push("password");
   const auth = authParts.join(" + ") || "default SSH auth";
   const group = groupNameFor(server.groupId);
@@ -841,6 +1056,11 @@ function renderContent() {
 
   if (state.activeOps === "multiterm") {
     elements.contentPane.append(renderMultiTerminalPanel());
+    return;
+  }
+
+  if (state.activeOps === "key-files") {
+    elements.contentPane.append(renderKeyFilesPanel());
     return;
   }
 
@@ -883,7 +1103,7 @@ function renderContent() {
   } else if (state.activeOps === "services") {
     panel.append(renderServicesPanel(server));
   } else if (state.activeOps === "files") {
-    panel.append(renderFilesPanel(server));
+    panel.append(renderFilesPanel(sftpSourceForServer(server)));
   } else if (state.activeOps === "command") {
     panel.append(renderCommandPanel(server));
   } else if (state.activeOps === "terminal") {
@@ -1264,13 +1484,32 @@ function renderServicesPanel(server) {
   return wrapper;
 }
 
-/* ---------- SFTP file manager (Files tab) ---------- */
+/* ---------- File manager (server SFTP + local keys folder) ---------- */
 
-function sftpStateFor(serverId) {
-  if (!state.sftp[serverId]) {
-    state.sftp[serverId] = { path: "/", entries: null, loading: false, error: "", started: false };
+// A file-manager "source" abstracts where the files live. Server SFTP and the
+// local shared keys folder reuse the same UI; only the API base, the state key,
+// and a couple of labels differ.
+function sftpSourceForServer(server) {
+  return {
+    id: server.id,
+    apiBase: `/api/servers/${server.id}/sftp`,
+    allowMkdir: true,
+    loadingLabel: "Connecting over SFTP…"
+  };
+}
+
+const KEY_FILES_SOURCE = {
+  id: "key-files",
+  apiBase: "/api/key-files",
+  allowMkdir: false,
+  loadingLabel: "Loading…"
+};
+
+function sftpStateFor(sourceId) {
+  if (!state.sftp[sourceId]) {
+    state.sftp[sourceId] = { path: "/", entries: null, loading: false, error: "", started: false };
   }
-  return state.sftp[serverId];
+  return state.sftp[sourceId];
 }
 
 function joinRemotePath(dir, name) {
@@ -1298,14 +1537,14 @@ function formatBytes(value) {
   return `${result.toFixed(result >= 100 ? 0 : 1)} ${unit}`;
 }
 
-async function sftpNavigate(server, targetPath) {
-  const sftp = sftpStateFor(server.id);
+async function sftpNavigate(source, targetPath) {
+  const sftp = sftpStateFor(source.id);
   sftp.loading = true;
   sftp.error = "";
   sftp.started = true;
   render();
   try {
-    const response = await api(`/api/servers/${server.id}/sftp/list?path=${encodeURIComponent(targetPath)}`);
+    const response = await api(`${source.apiBase}/list?path=${encodeURIComponent(targetPath)}`);
     sftp.path = response.path;
     sftp.entries = response.entries;
   } catch (error) {
@@ -1315,12 +1554,12 @@ async function sftpNavigate(server, targetPath) {
   render();
 }
 
-async function sftpUploadFiles(server, files) {
-  const sftp = sftpStateFor(server.id);
+async function sftpUploadFiles(source, files) {
+  const sftp = sftpStateFor(source.id);
   for (const file of files) {
     const target = joinRemotePath(sftp.path, file.name);
     showToast(`Uploading ${file.name}…`);
-    const response = await fetch(`/api/servers/${server.id}/sftp/upload?path=${encodeURIComponent(target)}`, {
+    const response = await fetch(`${source.apiBase}/upload?path=${encodeURIComponent(target)}`, {
       method: "POST",
       body: file
     });
@@ -1330,17 +1569,18 @@ async function sftpUploadFiles(server, files) {
     }
   }
   showToast(files.length > 1 ? `${files.length} files uploaded.` : "File uploaded.");
-  await sftpNavigate(server, sftp.path);
+  await sftpNavigate(source, sftp.path);
+  if (source.id === KEY_FILES_SOURCE.id) await refreshKeysAfterChange();
 }
 
-function renderFilesPanel(server) {
-  const sftp = sftpStateFor(server.id);
+function renderFilesPanel(source) {
+  const sftp = sftpStateFor(source.id);
   const wrapper = document.createElement("div");
   wrapper.className = "file-manager";
 
   if (!sftp.started) {
     window.requestAnimationFrame(() => {
-      sftpNavigate(server, sftp.path).catch(() => {});
+      sftpNavigate(source, sftp.path).catch(() => {});
     });
   }
 
@@ -1349,13 +1589,13 @@ function renderFilesPanel(server) {
 
   const crumbs = document.createElement("div");
   crumbs.className = "fm-crumbs";
-  const rootCrumb = actionButton("/", "fm-crumb", () => sftpNavigate(server, "/"));
+  const rootCrumb = actionButton("/", "fm-crumb", () => sftpNavigate(source, "/"));
   crumbs.append(rootCrumb);
   let crumbPath = "";
   for (const part of sftp.path.split("/").filter(Boolean)) {
     crumbPath += `/${part}`;
     const target = crumbPath;
-    crumbs.append(actionButton(part, "fm-crumb", () => sftpNavigate(server, target)));
+    crumbs.append(actionButton(part, "fm-crumb", () => sftpNavigate(source, target)));
   }
 
   const actions = document.createElement("div");
@@ -1368,31 +1608,33 @@ function renderFilesPanel(server) {
   fileInput.addEventListener("change", () => {
     const files = [...fileInput.files];
     if (files.length) {
-      sftpUploadFiles(server, files).catch(error => {
+      sftpUploadFiles(source, files).catch(error => {
         showToast(error.message);
-        sftpNavigate(server, sftp.path).catch(() => {});
+        sftpNavigate(source, sftp.path).catch(() => {});
       });
     }
     fileInput.value = "";
   });
 
-  actions.append(
-    actionButton("Upload", "primary-button", () => fileInput.click()),
-    actionButton("New folder", "secondary-button", async () => {
+  actions.append(actionButton("Upload", "primary-button", () => fileInput.click()));
+  if (source.allowMkdir) {
+    actions.append(actionButton("New folder", "secondary-button", async () => {
       const name = window.prompt("New folder name:");
       if (!name?.trim()) return;
       try {
-        await api(`/api/servers/${server.id}/sftp/mkdir`, {
+        await api(`${source.apiBase}/mkdir`, {
           method: "POST",
           body: JSON.stringify({ path: joinRemotePath(sftp.path, name.trim()) })
         });
         showToast("Folder created.");
-        await sftpNavigate(server, sftp.path);
+        await sftpNavigate(source, sftp.path);
       } catch (error) {
         showToast(error.message);
       }
-    }),
-    actionButton(sftp.loading ? "Loading…" : "Refresh", "secondary-button", () => sftpNavigate(server, sftp.path)),
+    }));
+  }
+  actions.append(
+    actionButton(sftp.loading ? "Loading…" : "Refresh", "secondary-button", () => sftpNavigate(source, sftp.path)),
     fileInput
   );
 
@@ -1425,7 +1667,7 @@ function renderFilesPanel(server) {
     name.type = "button";
     name.className = "fm-name";
     name.textContent = ".. (up)";
-    name.addEventListener("click", () => sftpNavigate(server, parentRemotePath(sftp.path)));
+    name.addEventListener("click", () => sftpNavigate(source, parentRemotePath(sftp.path)));
     up.append(name, document.createElement("span"), document.createElement("span"), document.createElement("span"));
     table.append(up);
   }
@@ -1433,7 +1675,7 @@ function renderFilesPanel(server) {
   if (sftp.loading && !sftp.entries) {
     const loading = document.createElement("div");
     loading.className = "fm-empty";
-    loading.textContent = "Connecting over SFTP…";
+    loading.textContent = source.loadingLabel;
     table.append(loading);
   } else if (sftp.entries && sftp.entries.length === 0) {
     const empty = document.createElement("div");
@@ -1442,7 +1684,7 @@ function renderFilesPanel(server) {
     table.append(empty);
   } else if (sftp.entries) {
     for (const entry of sftp.entries) {
-      table.append(renderFileRow(server, sftp, entry));
+      table.append(renderFileRow(source, sftp, entry));
     }
   }
 
@@ -1450,20 +1692,21 @@ function renderFilesPanel(server) {
   return wrapper;
 }
 
-function renderFileRow(server, sftp, entry) {
+function renderFileRow(source, sftp, entry) {
   const row = document.createElement("div");
   row.className = "fm-row";
   const entryPath = joinRemotePath(sftp.path, entry.name);
+  const downloadUrl = `${source.apiBase}/download?path=${encodeURIComponent(entryPath)}`;
 
   const name = document.createElement("button");
   name.type = "button";
   name.className = `fm-name ${entry.isDir ? "is-dir" : ""}`;
   name.textContent = `${entry.isDir ? "📁" : entry.isLink ? "🔗" : "📄"} ${entry.name}`;
   if (entry.isDir || entry.isLink) {
-    name.addEventListener("click", () => sftpNavigate(server, entryPath));
+    name.addEventListener("click", () => sftpNavigate(source, entryPath));
   } else {
     name.addEventListener("click", () => {
-      window.open(`/api/servers/${server.id}/sftp/download?path=${encodeURIComponent(entryPath)}`, "_blank");
+      window.open(downloadUrl, "_blank");
     });
   }
 
@@ -1479,7 +1722,7 @@ function renderFileRow(server, sftp, entry) {
     const download = document.createElement("a");
     download.className = "fm-action";
     download.textContent = "Download";
-    download.href = `/api/servers/${server.id}/sftp/download?path=${encodeURIComponent(entryPath)}`;
+    download.href = downloadUrl;
     rowActions.append(download);
   }
   rowActions.append(
@@ -1487,12 +1730,13 @@ function renderFileRow(server, sftp, entry) {
       const next = window.prompt("Rename to:", entry.name);
       if (!next?.trim() || next.trim() === entry.name) return;
       try {
-        await api(`/api/servers/${server.id}/sftp/rename`, {
+        await api(`${source.apiBase}/rename`, {
           method: "POST",
           body: JSON.stringify({ from: entryPath, to: joinRemotePath(sftp.path, next.trim()) })
         });
         showToast("Renamed.");
-        await sftpNavigate(server, sftp.path);
+        await sftpNavigate(source, sftp.path);
+        if (source.id === KEY_FILES_SOURCE.id) refreshKeysAfterChange();
       } catch (error) {
         showToast(error.message);
       }
@@ -1501,12 +1745,13 @@ function renderFileRow(server, sftp, entry) {
       const confirmed = window.confirm(`Delete "${entry.name}"?${entry.isDir ? "\n\nOnly empty directories can be deleted." : ""}`);
       if (!confirmed) return;
       try {
-        await api(`/api/servers/${server.id}/sftp/delete`, {
+        await api(`${source.apiBase}/delete`, {
           method: "POST",
           body: JSON.stringify({ path: entryPath, isDir: entry.isDir })
         });
         showToast("Deleted.");
-        await sftpNavigate(server, sftp.path);
+        await sftpNavigate(source, sftp.path);
+        if (source.id === KEY_FILES_SOURCE.id) refreshKeysAfterChange();
       } catch (error) {
         showToast(error.message);
       }
@@ -1515,6 +1760,40 @@ function renderFileRow(server, sftp, entry) {
 
   row.append(name, size, modified, rowActions);
   return row;
+}
+
+// The keys browser is the same file-manager UI bound to the local keys folder.
+function renderKeyFilesPanel() {
+  const wrapper = document.createElement("section");
+  wrapper.className = "operation-card";
+
+  const header = document.createElement("div");
+  header.className = "operation-header";
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h1");
+  title.textContent = "SSH keys";
+  const meta = document.createElement("p");
+  meta.textContent = `Shared keys folder · ${state.keyHostDir || state.keyUploadDir}`;
+  titleWrap.append(title, meta);
+  header.append(titleWrap, actionButton("Done", "secondary-button", () => {
+    setActiveOps("settings");
+    render();
+  }));
+  wrapper.append(header, renderFilesPanel(KEY_FILES_SOURCE));
+  return wrapper;
+}
+
+// Keep the server-form key dropdown and the keys card in sync after a change
+// made from the keys file browser.
+async function refreshKeysAfterChange() {
+  try {
+    const response = await api("/api/ssh-keys");
+    state.sshKeys = response.keys || [];
+    state.keyUploadDir = response.uploadDir || state.keyUploadDir;
+    state.keyHostDir = response.hostDir || state.keyHostDir;
+  } catch {
+    // Non-fatal: the dropdown just won't refresh until the next load.
+  }
 }
 
 function renderCommandPanel(server) {
@@ -1735,6 +2014,8 @@ async function load() {
   state.servers = servers.servers;
   state.groups = groups.groups;
   state.sshKeys = sshKeys.keys || [];
+  state.keyUploadDir = sshKeys.uploadDir || state.keyUploadDir;
+  state.keyHostDir = sshKeys.hostDir || sshKeys.uploadDir || state.keyHostDir;
   if (state.selectedId && !state.servers.some(server => server.id === state.selectedId)) {
     setSelectedId(null);
   }
@@ -1769,27 +2050,35 @@ async function saveServer() {
   const payload = formValue();
   if (!payload.host) {
     showToast("Host is required.");
-    return;
+    return false;
   }
-  if (state.draftNew) {
-    const response = await api("/api/servers", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    state.servers.unshift(response.server);
-    setSelectedId(response.server.id);
-    state.draftNew = false;
-    setActiveOps("settings");
-    showToast("Server saved.");
-  } else if (state.selectedId) {
-    const response = await api(`/api/servers/${state.selectedId}`, {
-      method: "PUT",
-      body: JSON.stringify(payload)
-    });
-    state.servers = state.servers.map(server => server.id === response.server.id ? response.server : server);
-    showToast("Server updated.");
+  try {
+    if (state.draftNew) {
+      const response = await api("/api/servers", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      state.servers.unshift(response.server);
+      setSelectedId(response.server.id);
+      state.draftNew = false;
+      setActiveOps("settings");
+      showToast("Server saved.");
+    } else if (state.selectedId) {
+      const response = await api(`/api/servers/${state.selectedId}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      state.servers = state.servers.map(server => server.id === response.server.id ? response.server : server);
+      showToast("Server updated.");
+    }
+    // Mark clean so the re-render reloads the form instead of preserving it.
+    state.settingsBaseline = settingsSnapshot();
+    render();
+    return true;
+  } catch (error) {
+    showToast(error.message);
+    return false;
   }
-  render();
 }
 
 async function deleteServer() {
@@ -2580,8 +2869,8 @@ elements.createMenu.addEventListener("click", event => {
   event.stopPropagation();
 });
 
-elements.newServerMenuButton.addEventListener("click", startNewServer);
-elements.newGroupMenuButton.addEventListener("click", startNewGroup);
+elements.newServerMenuButton.addEventListener("click", () => guardUnsaved(startNewServer));
+elements.newGroupMenuButton.addEventListener("click", () => guardUnsaved(startNewGroup));
 
 document.addEventListener("click", event => {
   if (state.addMenuOpen && !elements.createMenu.contains(event.target) && event.target !== elements.newServerButton) {
@@ -2622,15 +2911,41 @@ elements.groupNameInput.addEventListener("keydown", event => {
 });
 
 elements.serverSearch.addEventListener("input", renderList);
-elements.serverKeySelect.addEventListener("change", () => {
-  elements.serverKeyPath.hidden = elements.serverKeySelect.value !== "__custom__";
-  if (!elements.serverKeyPath.hidden) {
-    elements.serverKeyPath.focus();
-  }
-});
 elements.saveServerButton.addEventListener("click", saveServer);
 elements.deleteServerButton.addEventListener("click", deleteServer);
 elements.openTerminalButton.addEventListener("click", openTerminal);
+
+elements.uploadKeyButton.addEventListener("click", openKeyUpload);
+elements.openKeyFolderButton.addEventListener("click", () => guardUnsaved(openKeyFolder));
+elements.keyUploadCancel.addEventListener("click", closeKeyUpload);
+elements.keyUploadConfirm.addEventListener("click", confirmKeyUpload);
+elements.keyUploadOverlay.addEventListener("click", event => {
+  if (event.target === elements.keyUploadOverlay) closeKeyUpload();
+});
+
+elements.unsavedSave.addEventListener("click", async () => {
+  // Saving repopulates the form (clearing the dirty state); only then navigate.
+  if (await saveServer()) runPendingNavigation();
+  else elements.unsavedOverlay.hidden = true;
+});
+elements.unsavedDiscard.addEventListener("click", () => {
+  // Mark clean so the pending navigation's re-render reloads the form fresh,
+  // dropping the edits.
+  state.settingsBaseline = settingsSnapshot();
+  runPendingNavigation();
+});
+elements.unsavedCancel.addEventListener("click", closeUnsavedDialog);
+elements.unsavedOverlay.addEventListener("click", event => {
+  if (event.target === elements.unsavedOverlay) closeUnsavedDialog();
+});
+
+// Warn before a full page unload (tab close / reload) if edits are pending.
+window.addEventListener("beforeunload", event => {
+  if (isSettingsDirty()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 
 elements.serverForm.addEventListener("submit", event => {
   event.preventDefault();
@@ -2650,7 +2965,9 @@ boot().catch(error => {
 });
 
 window.setInterval(() => {
-  if (state.authStatus?.authenticated && elements.authOverlay.hidden) {
+  // Skip the periodic refresh while editing settings — reloading would
+  // overwrite the in-progress form.
+  if (state.authStatus?.authenticated && elements.authOverlay.hidden && !isSettingsDirty()) {
     load().catch(() => {});
   }
 }, 60000);

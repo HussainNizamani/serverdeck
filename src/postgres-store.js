@@ -65,6 +65,9 @@ function createPostgresStore(options = {}) {
         host text not null,
         user_name text not null,
         port integer not null,
+        -- One or more SSH key paths, newline-separated (see splitKeyPaths in
+        -- src/ssh.js). A single path is the common case; multiple keys are tried
+        -- in turn at connect time. Backward compatible — no migration needed.
         key_path text not null default '',
         bubble_label text not null default '',
         group_id uuid references groups(id) on delete set null,

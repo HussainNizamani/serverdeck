@@ -4,6 +4,49 @@ All notable changes to Server Deck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-15
+
+### Added
+
+- **SSH key management from the web UI.** A new **SSH keys** section in SSH
+  Settings lists the keys in your shared keys folder. Each server's key(s) are
+  chosen by tapping rows in that list — a ✓ marks selected keys, and you can
+  select **several** keys for one server (SSH tries each in turn until one
+  authenticates). This replaces the old single "SSH key" dropdown.
+- **Web key upload.** An **Upload key** button accepts a private key from the
+  browser. Uploads are validated as real OpenSSH/PEM/PPK keys (passphrase-
+  protected keys included), the filename is sanitized against path traversal,
+  the file is written `0600`, and an extensionless name gets `.key` appended so
+  it stays discoverable. The button is gated behind a warning that recommends
+  dropping the key in the folder or transferring it over SFTP instead — web
+  upload is a fallback.
+- **In-app keys file browser ("Open folder").** Opens the same file-manager UI
+  used for servers, but backed by the local keys folder and locked strictly to
+  it: browse, upload, download, rename, and delete keys. No SSH/FTP session is
+  involved — the folder is local to the panel.
+- **Unsaved-changes guard in SSH Settings.** Editing any field or key selection
+  and then navigating away (another server, the feature nav, New server, Open
+  folder, duplicate, or closing the tab) prompts a Save / Discard / Cancel
+  dialog so changes are never lost silently. The periodic background refresh no
+  longer clobbers an in-progress edit either.
+
+### Changed
+
+- **One shared keys directory.** The keys folder is now the single location
+  Server Deck reads keys from and writes uploads to — `~/.ssh` and the previous
+  multi-directory scan were removed. It is bind-mounted **read-write** (was
+  read-only) so uploads and permission enforcement work.
+- **Folder-wide permission enforcement.** The directory is forced to `0700` and
+  every private key to `0600` on container boot and after each upload/delete,
+  so a key dropped in with loose modes (e.g. `0777`) is corrected automatically.
+- **UID-aligned container entrypoint.** A new `docker-entrypoint.sh` aligns the
+  container user to your host `PUID`/`PGID`, takes ownership of the keys folder
+  so the same files are manageable from both your terminal and the panel, then
+  drops from root to the unprivileged `node` user (via `gosu`) before starting.
+- Multiple keys per server are stored newline-separated in the existing
+  `key_path` column — **no database migration is required** and existing
+  single-key servers keep working unchanged.
+
 ## [1.1.1] - 2026-06-12
 
 ### Added

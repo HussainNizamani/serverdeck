@@ -1,25 +1,9 @@
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 const { Client } = require("ssh2");
-const { resolveIdentity } = require("./ssh");
+const { resolveIdentity, splitKeyPaths } = require("./ssh");
 
-const DEFAULT_KEY_NAMES = ["id_ed25519", "id_ecdsa", "id_rsa"];
-
-function defaultPrivateKey() {
-  for (const name of DEFAULT_KEY_NAMES) {
-    const keyPath = path.join(os.homedir(), ".ssh", name);
-    try {
-      return fs.readFileSync(keyPath);
-    } catch {
-      // Try the next conventional key location.
-    }
-  }
-  return null;
-}
-
-function connectionConfig(server) {
-  const config = {
+function baseConfig(server) {
+  return {
     host: server.host,
     port: Number(server.port || 22),
     username: server.user || "root",
@@ -27,61 +11,95 @@ function connectionConfig(server) {
     keepaliveInterval: 30000,
     keepaliveCountMax: 3
   };
+}
 
-  // server.password is the already-decrypted plaintext, attached by the API
-  // layer right before connecting. It is never stored on the server record.
-  const password = String(server.password || "");
-  if (password) {
-    config.password = password;
-    config.tryKeyboard = true;
-  }
-
-  if (server.keyPath) {
-    const identity = resolveIdentity(server);
+// Reads every selected key into memory. PPK keys are converted on the fly and
+// their temp files removed immediately, so nothing lingers on disk.
+function keyBuffers(server) {
+  const buffers = [];
+  for (const keyPath of splitKeyPaths(server.keyPath)) {
+    const identity = resolveIdentity({ keyPath });
     if (identity.error) {
       identity.cleanup();
       throw new Error(identity.error);
     }
-    // resolveIdentity returns ["-i", "<path>"]; read the key into memory and
-    // clean up immediately so temporary PPK conversions never linger on disk.
     const keyFile = identity.args[1];
+    if (!keyFile) {
+      identity.cleanup();
+      continue;
+    }
     try {
-      config.privateKey = fs.readFileSync(keyFile);
+      buffers.push(fs.readFileSync(keyFile));
     } finally {
       identity.cleanup();
     }
-  } else if (!password) {
-    const fallbackKey = defaultPrivateKey();
-    if (fallbackKey) config.privateKey = fallbackKey;
-    if (process.env.SSH_AUTH_SOCK) config.agent = process.env.SSH_AUTH_SOCK;
-    if (!config.privateKey && !config.agent) {
-      throw new Error("No SSH key or password configured for this server, and no default key or agent is available.");
-    }
   }
+  return buffers;
+}
 
-  return config;
+function attemptConnect(config, onReady, onError) {
+  const conn = new Client();
+  conn.on("ready", () => onReady(conn));
+  conn.on("error", onError);
+  if (config.tryKeyboard) {
+    // Some servers use keyboard-interactive instead of plain password auth;
+    // answer every prompt with the configured password.
+    conn.on("keyboard-interactive", (name, instructions, lang, prompts, finish) => {
+      finish(prompts.map(() => config.password));
+    });
+  }
+  conn.connect(config);
 }
 
 function connect(server) {
   return new Promise((resolve, reject) => {
-    let config;
+    const base = baseConfig(server);
+    const fail = err => reject(new Error(`SSH connection failed: ${err.message}`));
+
+    // server.password is the already-decrypted plaintext, attached by the API
+    // layer right before connecting. It is never stored on the server record.
+    const password = String(server.password || "");
+    if (password) {
+      attemptConnect({ ...base, password, tryKeyboard: true }, resolve, fail);
+      return;
+    }
+
+    let keys;
     try {
-      config = connectionConfig(server);
+      keys = keyBuffers(server);
     } catch (err) {
       reject(err);
       return;
     }
-    const conn = new Client();
-    conn.on("ready", () => resolve(conn));
-    conn.on("error", err => reject(new Error(`SSH connection failed: ${err.message}`)));
-    if (config.tryKeyboard) {
-      // Some servers use keyboard-interactive instead of plain password auth;
-      // answer every prompt with the configured password.
-      conn.on("keyboard-interactive", (name, instructions, lang, prompts, finish) => {
-        finish(prompts.map(() => config.password));
-      });
+
+    const agent = process.env.SSH_AUTH_SOCK || "";
+
+    if (!keys.length) {
+      if (agent) {
+        attemptConnect({ ...base, agent }, resolve, fail);
+        return;
+      }
+      reject(new Error("No SSH key or password configured for this server. Select a key in SSH Keys, set a password, or expose an SSH agent."));
+      return;
     }
-    conn.connect(config);
+
+    // Try each selected key in turn, advancing only when the server rejects the
+    // current key (authentication failure). Network-level errors stop the loop.
+    let index = 0;
+    const tryKey = () => {
+      attemptConnect({ ...base, privateKey: keys[index] }, resolve, err => {
+        const authFailed = Boolean(err) && err.level === "client-authentication";
+        if (authFailed && index + 1 < keys.length) {
+          index += 1;
+          tryKey();
+        } else if (authFailed && agent) {
+          attemptConnect({ ...base, agent }, resolve, fail);
+        } else {
+          fail(err);
+        }
+      });
+    };
+    tryKey();
   });
 }
 

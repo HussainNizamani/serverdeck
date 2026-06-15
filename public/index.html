@@ -123,11 +123,6 @@
                     <input id="serverPort" type="number" min="1" max="65535" placeholder="22">
                   </label>
                   <label class="wide">
-                    <span>SSH key</span>
-                    <select id="serverKeySelect"></select>
-                    <input id="serverKeyPath" autocomplete="off" placeholder="/keys/id_ed25519" hidden>
-                  </label>
-                  <label class="wide">
                     <span>SSH password <em>(optional — for servers without key auth; stored encrypted)</em></span>
                     <input id="serverPassword" type="password" autocomplete="new-password" placeholder="Leave empty to use keys only">
                   </label>
@@ -138,6 +133,20 @@
                     </label>
                   </div>
                 </div>
+              </section>
+
+              <section class="form-card">
+                <div class="panel-heading">
+                  <div>
+                    <h2 class="form-card-title">SSH keys</h2>
+                    <p>Tap a key to use it for this server (a ✓ marks selected keys — you can pick several). Save to apply.</p>
+                  </div>
+                  <div class="key-actions">
+                    <button type="button" id="openKeyFolderButton" class="secondary-button">Open folder</button>
+                    <button type="button" id="uploadKeyButton" class="secondary-button">Upload key</button>
+                  </div>
+                </div>
+                <ul id="keyList" class="key-list"></ul>
               </section>
 
               <section class="form-card">
@@ -245,6 +254,38 @@
           <p id="authError" class="auth-error" hidden></p>
         </form>
         <p class="auth-footnote">Access is restricted to localhost and your Tailscale network.</p>
+      </div>
+    </div>
+
+    <div id="keyUploadOverlay" class="auth-overlay" hidden>
+      <div class="auth-card">
+        <h1>Upload SSH key</h1>
+        <p id="keyUploadWarning" class="key-upload-warning">
+          <strong>Heads up:</strong> web upload sends your private key through the browser.
+          The recommended way to add a key is to place it directly in the keys folder on the
+          host, or transfer it over SFTP. Only upload here if you can't reach the host directly.
+        </p>
+        <label class="auth-form">
+          <span>Private key file</span>
+          <input id="keyFileInput" type="file">
+        </label>
+        <p id="keyUploadError" class="auth-error" hidden></p>
+        <div class="key-upload-actions">
+          <button type="button" id="keyUploadCancel" class="secondary-button">Cancel</button>
+          <button type="button" id="keyUploadConfirm" class="danger-button">Upload anyway</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="unsavedOverlay" class="auth-overlay" hidden>
+      <div class="auth-card">
+        <h1>Unsaved changes</h1>
+        <p class="auth-subtitle">You have unsaved changes to this server's settings. Save them, discard them, or stay on this page.</p>
+        <div class="key-upload-actions">
+          <button type="button" id="unsavedCancel" class="secondary-button">Cancel</button>
+          <button type="button" id="unsavedDiscard" class="danger-button">Discard</button>
+          <button type="button" id="unsavedSave" class="primary-button">Save</button>
+        </div>
       </div>
     </div>
 
