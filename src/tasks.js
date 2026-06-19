@@ -226,6 +226,39 @@ fail2ban-client status 2>/dev/null || echo "fail2ban unavailable"
   return shell(command);
 }
 
+// Cheap, single-shot resource snapshot for live polling. Returns RAW counters
+// (cpu jiffies, net byte totals) so the caller can compute CPU% and net speed
+// as deltas between consecutive samples — no remote `sleep` needed.
+const METRICS_SCRIPT = [
+  `awk '/^cpu /{print "cpu",($2+$3+$4+$5+$6+$7+$8+$9+$10),($5+$6)}' /proc/stat`,
+  `awk '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}END{if(t>0)printf "mem %.1f\\n",(t-a)/t*100}' /proc/meminfo`,
+  `df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5);print "disk",$5}'`,
+  `awk 'NR>2{sub(/:/," ");if($1!="lo"){rx+=$2;tx+=$10}}END{print "net",rx+0,tx+0}' /proc/net/dev`
+].join("\n");
+
+function parseMetrics(stdout) {
+  const out = { cpu: null, memPercent: null, diskPercent: null, net: null };
+  for (const line of String(stdout || "").split("\n")) {
+    const p = line.trim().split(/\s+/);
+    if (p[0] === "cpu" && p.length >= 3) out.cpu = { total: Number(p[1]), idle: Number(p[2]) };
+    else if (p[0] === "mem" && p.length >= 2) out.memPercent = Number(p[1]);
+    else if (p[0] === "disk" && p.length >= 2) out.diskPercent = Number(p[1]);
+    else if (p[0] === "net" && p.length >= 3) out.net = { rx: Number(p[1]), tx: Number(p[2]) };
+  }
+  return out;
+}
+
+async function collectMetrics(server) {
+  const command = shell(METRICS_SCRIPT);
+  const result = server.password
+    ? await runSsh2(server, command, { timeoutMs: 8000 })
+    : await runSsh(server, command, { timeoutMs: 8000, batch: true });
+  if (!result.stdout && result.stderr) {
+    return { error: result.stderr.trim() || "Could not read metrics", at: Date.now() };
+  }
+  return { ...parseMetrics(result.stdout), at: Date.now() };
+}
+
 async function runServerTask(server, body = {}) {
   const task = String(body.task || "overview");
   const command = commandForTask(body);
@@ -244,6 +277,8 @@ async function runServerTask(server, body = {}) {
 module.exports = {
   TASKS,
   commandForTask,
+  collectMetrics,
+  parseMetrics,
   runServerTask,
   shQuote
 };

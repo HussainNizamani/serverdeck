@@ -101,6 +101,12 @@ const state = {
   draftKeyPaths: [],
   settingsBaseline: null,
   pendingNavigation: null,
+  liveDuration: "300",
+  liveInterval: "5",
+  agentLimitOn: false,
+  liveSession: null,
+  liveSamples: {},
+  liveRaw: {},
   activeOps: initialActiveOps(),
   opsOutputs: {},
   busyKeys: {},
@@ -164,6 +170,16 @@ const elements = {
   unsavedSave: document.querySelector("#unsavedSave"),
   unsavedDiscard: document.querySelector("#unsavedDiscard"),
   unsavedCancel: document.querySelector("#unsavedCancel"),
+  exportOverlay: document.querySelector("#exportOverlay"),
+  exportList: document.querySelector("#exportList"),
+  exportError: document.querySelector("#exportError"),
+  exportCancel: document.querySelector("#exportCancel"),
+  exportConfirm: document.querySelector("#exportConfirm"),
+  importOverlay: document.querySelector("#importOverlay"),
+  importList: document.querySelector("#importList"),
+  importError: document.querySelector("#importError"),
+  importCancel: document.querySelector("#importCancel"),
+  importConfirm: document.querySelector("#importConfirm"),
   opsTabs: document.querySelector("#opsTabs"),
   toast: document.querySelector("#toast"),
   authOverlay: document.querySelector("#authOverlay"),
@@ -502,67 +518,125 @@ function toggleKeySelection(keyPath) {
   renderKeyList();
 }
 
+function keyListRow(opts) {
+  const { title, meta, path, selected, canEdit, missing = false, onDelete = null, access = null } = opts;
+  const item = document.createElement("li");
+  item.className = `key-list-item ${selected ? "selected" : ""} ${missing ? "missing" : ""} ${canEdit ? "selectable" : ""}`.replace(/\s+/g, " ").trim();
+  item.setAttribute("role", "button");
+  item.setAttribute("aria-pressed", selected ? "true" : "false");
+
+  const info = document.createElement("div");
+  info.className = "key-list-info";
+  const name = document.createElement("span");
+  name.className = "key-list-name";
+  name.textContent = title;
+  const metaEl = document.createElement("span");
+  metaEl.className = "key-list-meta";
+  metaEl.textContent = meta;
+  info.append(name, metaEl);
+
+  // Permission/access diagnostic — only when there's something to act on.
+  // ("ok"/"secured" are silent; "secured" means we already tightened it.)
+  const status = access && access.status;
+  if (status && !["ok", "secured", "none"].includes(status)) {
+    const box = document.createElement("div");
+    box.className = `key-status ${status}`;
+    if (status === "checking") {
+      box.textContent = "checking access…";
+    } else {
+      box.textContent = access.message || "Permission problem.";
+      if (access.command) {
+        const cmd = document.createElement("div");
+        cmd.className = "key-cmd";
+        cmd.addEventListener("click", event => event.stopPropagation());
+        const code = document.createElement("code");
+        code.textContent = access.command;
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "key-cmd-copy";
+        copy.textContent = "Copy";
+        copy.addEventListener("click", () => { copyText(access.command); showToast("Command copied."); });
+        cmd.append(code, copy);
+        box.append(cmd);
+      }
+    }
+    info.append(box);
+  }
+  item.append(info);
+
+  const right = document.createElement("div");
+  right.className = "key-list-right";
+  const tick = document.createElement("span");
+  tick.className = "key-tick";
+  tick.textContent = "✓";
+  tick.hidden = !selected;
+  tick.title = "Selected for this server";
+  right.append(tick);
+  if (onDelete) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "key-delete";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", event => { event.stopPropagation(); onDelete(); });
+    right.append(remove);
+  }
+  item.append(right);
+
+  if (canEdit) item.addEventListener("click", () => toggleKeySelection(path));
+  return item;
+}
+
+// Lazily fetch access status for a selected key that isn't in the discovered
+// folder (custom/stale path), then re-render once it resolves.
+function checkCustomKeyAccess(path) {
+  if (!state.keyAccessCache) state.keyAccessCache = {};
+  if (state.keyAccessCache[path]) return;
+  state.keyAccessCache[path] = { status: "checking" };
+  api(`/api/ssh-keys?check=${encodeURIComponent(path)}`)
+    .then(res => { state.keyAccessCache[path] = res.access || { status: "unreachable" }; })
+    .catch(() => { state.keyAccessCache[path] = { status: "unreachable", message: "Could not check this path." }; })
+    .finally(() => renderKeyList());
+}
+
 function renderKeyList() {
   if (!elements.keyList) return;
   elements.keyList.innerHTML = "";
+  const canEdit = state.draftNew || Boolean(selectedServer());
+  const discovered = new Set(state.sshKeys.map(key => key.path));
 
-  if (!state.sshKeys.length) {
+  for (const key of state.sshKeys) {
+    elements.keyList.append(keyListRow({
+      title: key.name,
+      meta: `${key.type === "ppk" ? "PuTTY" : "OpenSSH"} · ${key.path}`,
+      path: key.path,
+      selected: state.draftKeyPaths.includes(key.path),
+      canEdit,
+      access: key.access || null,
+      onDelete: isManagedKey(key) ? () => deleteSshKey(key.name, key.path) : null
+    }));
+  }
+
+  // Keys selected on the server but not in the folder (moved/renamed/custom).
+  // Shown so they're visible and removable, with a live access check + fix command.
+  for (const path of state.draftKeyPaths) {
+    if (discovered.has(path)) continue;
+    checkCustomKeyAccess(path);
+    elements.keyList.append(keyListRow({
+      title: path.split("/").pop() || path,
+      meta: path,
+      path,
+      selected: true,
+      missing: true,
+      canEdit,
+      access: (state.keyAccessCache || {})[path] || null
+    }));
+  }
+
+  if (!elements.keyList.childElementCount) {
     const empty = document.createElement("li");
     empty.className = "key-list-empty";
     empty.textContent = "No keys yet — upload one or drop it in the shared folder.";
     elements.keyList.append(empty);
-    return;
-  }
-
-  const canEdit = state.draftNew || Boolean(selectedServer());
-
-  for (const key of state.sshKeys) {
-    const selected = state.draftKeyPaths.includes(key.path);
-    const item = document.createElement("li");
-    item.className = `key-list-item ${selected ? "selected" : ""} ${canEdit ? "selectable" : ""}`;
-    item.setAttribute("role", "button");
-    item.setAttribute("aria-pressed", selected ? "true" : "false");
-
-    const info = document.createElement("div");
-    info.className = "key-list-info";
-    const name = document.createElement("span");
-    name.className = "key-list-name";
-    name.textContent = key.name;
-    const meta = document.createElement("span");
-    meta.className = "key-list-meta";
-    meta.textContent = `${key.type === "ppk" ? "PuTTY" : "OpenSSH"} · ${key.path}`;
-    info.append(name, meta);
-    item.append(info);
-
-    const right = document.createElement("div");
-    right.className = "key-list-right";
-    const tick = document.createElement("span");
-    tick.className = "key-tick";
-    tick.textContent = "✓";
-    tick.hidden = !selected;
-    tick.title = "Selected for this server";
-    right.append(tick);
-
-    if (isManagedKey(key)) {
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "key-delete";
-      remove.textContent = "Delete";
-      // Don't let a delete click also toggle the row's selection.
-      remove.addEventListener("click", event => {
-        event.stopPropagation();
-        deleteSshKey(key.name, key.path);
-      });
-      right.append(remove);
-    }
-    item.append(right);
-
-    // The whole row toggles selection for this server.
-    if (canEdit) {
-      item.addEventListener("click", () => toggleKeySelection(key.path));
-    }
-
-    elements.keyList.append(item);
   }
 }
 
@@ -1090,7 +1164,41 @@ function renderContent() {
   titleWrap.append(title, meta);
   header.append(titleWrap);
 
-  if (state.activeOps !== "terminal" && state.activeOps !== "command" && state.activeOps !== "files") {
+  if (state.activeOps === "overview") {
+    // Live monitor for every server. Both pick a refresh interval. Non-agent is
+    // always time-boxed by a session length; agent runs continuously unless the
+    // "session limit" toggle is on, which then reveals the session-length box.
+    const agent = hasAgent(server);
+    const live = Boolean(state.liveSession && state.liveSession.serverId === server.id);
+
+    if (live) {
+      header.append(actionButton("Stop", "danger-button", () => { stopLiveSession(); render(); }));
+    } else {
+      const limited = !agent || state.agentLimitOn;
+      if (agent) {
+        header.append(actionButton(
+          state.agentLimitOn ? "Session limit: on" : "Session limit: off",
+          `secondary-button live-toggle ${state.agentLimitOn ? "on" : ""}`.trim(),
+          () => { state.agentLimitOn = !state.agentLimitOn; render(); }
+        ));
+      }
+      if (limited) {
+        header.append(liveSelect(LIVE_DURATIONS, state.liveDuration, value => { state.liveDuration = value; }, "Session length"));
+      }
+      header.append(liveSelect(LIVE_INTERVALS, state.liveInterval, value => { state.liveInterval = value; }, "Refresh interval"));
+
+      const refresh = actionButton(isBusy(server.id, "overview") ? "Running" : "Refresh", "secondary-button", () => {
+        runTaskForServer(server.id, "overview");
+        startLiveSession(server, {
+          seconds: limited ? Number(state.liveDuration) : null,
+          intervalMs: Number(state.liveInterval) * 1000
+        });
+        render();
+      });
+      refresh.disabled = isBusy(server.id, "overview");
+      header.append(refresh);
+    }
+  } else if (state.activeOps !== "terminal" && state.activeOps !== "command" && state.activeOps !== "files") {
     const refresh = actionButton(isBusy(server.id, state.activeOps) ? "Running" : "Refresh", "secondary-button", () => runTaskForServer(server.id, state.activeOps));
     refresh.disabled = isBusy(server.id, state.activeOps);
     header.append(refresh);
@@ -1163,12 +1271,239 @@ function renderPanelSettings() {
   wrapper.append(
     header,
     renderAppearanceCard(),
+    renderBackupCard(),
     renderAccountCard(),
     renderTwoFactorCard(),
     renderSessionsCard(),
     renderAccessCard()
   );
   return wrapper;
+}
+
+function renderBackupCard() {
+  const card = settingsCard("Backup");
+  const row = document.createElement("div");
+  row.className = "setting-row";
+  const label = document.createElement("div");
+  label.className = "setting-row-label";
+  label.innerHTML = "<strong>Export / import servers</strong><span>Download your servers' settings as JSON (passwords excluded), or import them from a file. Import creates servers; passwords are re-entered after.</span>";
+
+  const importInput = document.createElement("input");
+  importInput.type = "file";
+  importInput.accept = "application/json,.json";
+  importInput.hidden = true;
+  importInput.addEventListener("change", () => {
+    const file = importInput.files[0];
+    if (file) importServers(file).catch(error => showToast(error.message));
+    importInput.value = "";
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "key-actions";
+  actions.append(
+    actionButton("Import servers", "secondary-button", () => importInput.click()),
+    actionButton("Export servers", "secondary-button", openExportDialog),
+    importInput
+  );
+  row.append(label, actions);
+  card.append(row);
+  return card;
+}
+
+// Parse the file and open a preview dialog. Duplicates (name already exists)
+// are flagged and left unchecked. ponytail: dedupe by name only.
+async function importServers(file) {
+  let data;
+  try {
+    data = JSON.parse(await readFileAsText(file));
+  } catch {
+    showToast("That file isn't valid JSON.");
+    return;
+  }
+  const list = (Array.isArray(data) ? data : (data.servers || [])).filter(entry => entry && entry.host);
+  if (!list.length) {
+    showToast("No servers found in the file.");
+    return;
+  }
+  const seen = new Set(state.servers.map(server => (server.name || "").trim().toLowerCase()));
+  state.importEntries = list.map((entry, index) => ({
+    entry,
+    index,
+    duplicate: Boolean((entry.name || "").trim()) && seen.has((entry.name || "").trim().toLowerCase())
+  }));
+  elements.importError.hidden = true;
+  renderImportList();
+  elements.importOverlay.hidden = false;
+}
+
+function renderImportList() {
+  elements.importList.innerHTML = "";
+  const items = state.importEntries || [];
+
+  const all = document.createElement("label");
+  all.className = "export-row export-all";
+  const allText = document.createElement("span");
+  allText.textContent = `Select all (${items.length})`;
+  const allBox = document.createElement("input");
+  allBox.type = "checkbox";
+  allBox.checked = items.every(item => !item.duplicate);
+  allBox.addEventListener("change", () => {
+    for (const box of elements.importList.querySelectorAll("input[data-idx]")) box.checked = allBox.checked;
+  });
+  all.append(allText, allBox);
+  elements.importList.append(all);
+
+  for (const item of items) {
+    const row = document.createElement("label");
+    row.className = `export-row ${item.duplicate ? "dup" : ""}`.trim();
+    const name = document.createElement("span");
+    name.textContent = item.entry.name || item.entry.host;
+    const meta = document.createElement("span");
+    meta.className = "imp-meta";
+    const group = item.entry.group ? `group: ${item.entry.group}` : "no group";
+    meta.textContent = item.duplicate ? `already exists · ${group}` : group;
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !item.duplicate;
+    box.dataset.idx = String(item.index);
+    row.append(name, meta, box);
+    elements.importList.append(row);
+  }
+}
+
+function closeImportDialog() {
+  elements.importOverlay.hidden = true;
+}
+
+async function confirmImport() {
+  const chosen = new Set(
+    [...elements.importList.querySelectorAll("input[data-idx]:checked")].map(box => Number(box.dataset.idx))
+  );
+  const picked = (state.importEntries || []).filter(item => chosen.has(item.index));
+  if (!picked.length) {
+    elements.importError.textContent = "Select at least one server.";
+    elements.importError.hidden = false;
+    return;
+  }
+  let imported = 0;
+  for (const { entry } of picked) {
+    const groupId = state.groups.find(group => group.name === entry.group)?.id || "";
+    try {
+      await api("/api/servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: entry.name,
+          host: entry.host,
+          user: entry.user,
+          port: entry.port,
+          keyPath: entry.keyPath || "",
+          bubbleLabel: entry.bubbleLabel || "",
+          groupId,
+          tags: entry.tags || [],
+          notes: entry.notes || ""
+        })
+      });
+      imported += 1;
+    } catch {
+      // skip rows the API rejects (e.g. missing host)
+    }
+  }
+  await load();
+  closeImportDialog();
+  showToast(`Imported ${imported} server${imported === 1 ? "" : "s"}.`);
+}
+
+// Portable, instance-independent server settings (no id/agentToken/timestamps,
+// no password material — group is exported by name, not its internal id).
+function serverExport(server) {
+  return {
+    name: server.name,
+    host: server.host,
+    user: server.user,
+    port: server.port,
+    keyPath: server.keyPath || "",
+    bubbleLabel: server.bubbleLabel || "",
+    group: groupNameFor(server.groupId) || "",
+    tags: server.tags || [],
+    notes: server.notes || "",
+    hasPassword: Boolean(server.hasPassword)
+  };
+}
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function openExportDialog() {
+  if (!state.servers.length) {
+    showToast("No servers to export.");
+    return;
+  }
+  elements.exportError.hidden = true;
+  renderExportList();
+  elements.exportOverlay.hidden = false;
+}
+
+function closeExportDialog() {
+  elements.exportOverlay.hidden = true;
+}
+
+function renderExportList() {
+  elements.exportList.innerHTML = "";
+
+  const all = document.createElement("label");
+  all.className = "export-row export-all";
+  const allText = document.createElement("span");
+  allText.textContent = `Select all (${state.servers.length})`;
+  const allBox = document.createElement("input");
+  allBox.type = "checkbox";
+  allBox.checked = true;
+  allBox.addEventListener("change", () => {
+    for (const box of elements.exportList.querySelectorAll("input[data-server]")) box.checked = allBox.checked;
+  });
+  all.append(allText, allBox);
+  elements.exportList.append(all);
+
+  for (const server of state.servers) {
+    const row = document.createElement("label");
+    row.className = "export-row";
+    const text = document.createElement("span");
+    text.textContent = server.name;
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.dataset.server = server.id;
+    row.append(text, box);
+    elements.exportList.append(row);
+  }
+}
+
+function confirmExport() {
+  const ids = new Set(
+    [...elements.exportList.querySelectorAll("input[data-server]:checked")].map(box => box.dataset.server)
+  );
+  const chosen = state.servers.filter(server => ids.has(server.id));
+  if (!chosen.length) {
+    elements.exportError.textContent = "Select at least one server.";
+    elements.exportError.hidden = false;
+    return;
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadJson(`serverdeck-servers-${stamp}.json`, {
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    servers: chosen.map(serverExport)
+  });
+  closeExportDialog();
+  showToast(`Exported ${chosen.length} server${chosen.length === 1 ? "" : "s"}.`);
 }
 
 function renderAppearanceCard() {
@@ -1442,6 +1777,244 @@ function renderEmptyState(title, message) {
   return section;
 }
 
+/* ---------- Live resource monitor (Overview, non-agent servers) ---------- */
+
+// Non-agent servers: a time-boxed session length (live SSH polling is load, so
+// it auto-stops). Agent servers: a refresh interval that runs continuously with
+// no session limit.
+const LIVE_DURATIONS = [
+  { value: "0", label: "Once" },
+  { value: "60", label: "1 min" },
+  { value: "300", label: "5 min" },
+  { value: "600", label: "10 min" }
+];
+const LIVE_INTERVALS = [
+  { value: "2", label: "every 2s" },
+  { value: "5", label: "every 5s" },
+  { value: "10", label: "every 10s" },
+  { value: "30", label: "every 30s" }
+];
+const NON_AGENT_INTERVAL_MS = 4000;
+const LIVE_MAX_POINTS = 40;
+let liveTimer = null;
+
+// A server counts as agent-managed if it has reported recently (default agent
+// cadence is hourly). Those feed Overview from their reports, so the live
+// SSH-polling session is only offered for servers without an active agent.
+function hasAgent(server) {
+  const at = server?.lastReport?.receivedAt;
+  return Boolean(at) && (Date.now() - new Date(at).getTime() < 2 * 60 * 60 * 1000);
+}
+
+function liveSamplesFor(serverId) {
+  if (!state.liveSamples[serverId]) state.liveSamples[serverId] = [];
+  return state.liveSamples[serverId];
+}
+
+function formatRate(bytesPerSec) {
+  return `${formatBytes(bytesPerSec)}/s`;
+}
+
+function liveSelect(options, value, onChange, title) {
+  const select = document.createElement("select");
+  select.className = "live-duration";
+  select.title = title;
+  for (const opt of options) {
+    const option = document.createElement("option");
+    option.value = opt.value;
+    option.textContent = opt.label;
+    select.append(option);
+  }
+  select.value = value;
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function stopLiveSession() {
+  if (liveTimer) { window.clearTimeout(liveTimer); liveTimer = null; }
+  state.liveSession = null;
+}
+
+async function pollLiveMetrics(serverId) {
+  let raw;
+  try {
+    raw = await api(`/api/servers/${serverId}/metrics`);
+  } catch {
+    return; // transient — keep the session running and retry next tick
+  }
+  const prev = state.liveRaw[serverId];
+  state.liveRaw[serverId] = raw;
+  if (raw.error) return;
+
+  const point = { at: raw.at, cpu: null, mem: raw.memPercent, disk: raw.diskPercent, rx: 0, tx: 0 };
+  if (prev && !prev.error && raw.cpu && prev.cpu) {
+    const totalD = raw.cpu.total - prev.cpu.total;
+    const idleD = raw.cpu.idle - prev.cpu.idle;
+    if (totalD > 0) point.cpu = Math.max(0, Math.min(100, (1 - idleD / totalD) * 100));
+    const dt = (raw.at - prev.at) / 1000;
+    if (dt > 0 && raw.net && prev.net) {
+      point.rx = Math.max(0, (raw.net.rx - prev.net.rx) / dt);
+      point.tx = Math.max(0, (raw.net.tx - prev.net.tx) / dt);
+    }
+  }
+  const samples = liveSamplesFor(serverId);
+  samples.push(point);
+  while (samples.length > LIVE_MAX_POINTS) samples.shift();
+}
+
+function tickLive() {
+  const session = state.liveSession;
+  if (!session) return;
+  const server = selectedServer();
+  if (!server || server.id !== session.serverId || state.activeOps !== "overview") {
+    stopLiveSession();
+    render();
+    return;
+  }
+  // endsAt === null means a continuous session (agent servers) — no time limit.
+  if (session.endsAt !== null && Date.now() >= session.endsAt) {
+    stopLiveSession();
+    render();
+    return;
+  }
+  pollLiveMetrics(session.serverId).finally(() => {
+    updateLiveWidget();
+    if (state.liveSession) liveTimer = window.setTimeout(tickLive, session.intervalMs);
+  });
+}
+
+// opts.seconds: session length (>0 time-boxed, null = continuous, 0 = single poll).
+// opts.intervalMs: poll cadence.
+function startLiveSession(server, { seconds = 0, intervalMs = NON_AGENT_INTERVAL_MS } = {}) {
+  stopLiveSession();
+  delete state.liveRaw[server.id];
+  liveSamplesFor(server.id).length = 0;
+  const continuous = seconds === null;
+  if (continuous || seconds > 0) {
+    state.liveSession = { serverId: server.id, endsAt: continuous ? null : Date.now() + seconds * 1000, intervalMs };
+  }
+  pollLiveMetrics(server.id).finally(() => {
+    updateLiveWidget();
+    if (state.liveSession) liveTimer = window.setTimeout(tickLive, intervalMs);
+  });
+}
+
+// Refresh just the widget in place so polling never re-renders the whole page.
+function updateLiveWidget() {
+  const el = document.getElementById("liveMonitor");
+  const server = selectedServer();
+  if (el && server) el.replaceChildren(...liveMonitorContent(server));
+  else if (!el && state.liveSession) stopLiveSession();
+}
+
+function usageBar(label, percent) {
+  const value = Number(percent);
+  const known = Number.isFinite(value);
+  const row = document.createElement("div");
+  row.className = "usage-row";
+  const name = document.createElement("span");
+  name.className = "usage-label";
+  name.textContent = label;
+  const track = document.createElement("span");
+  track.className = "usage-track";
+  const fill = document.createElement("span");
+  fill.className = `usage-fill ${known && value >= 90 ? "hot" : known && value >= 70 ? "warm" : ""}`.trim();
+  fill.style.width = `${known ? Math.max(0, Math.min(100, value)) : 0}%`;
+  track.append(fill);
+  const pct = document.createElement("span");
+  pct.className = "usage-pct";
+  pct.textContent = known ? `${value.toFixed(0)}%` : "--";
+  row.append(name, track, pct);
+  return row;
+}
+
+function sparklineSvg(values, { max = null, width = 140, height = 30 } = {}) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("class", "live-spark");
+  svg.setAttribute("preserveAspectRatio", "none");
+  const nums = values.filter(v => Number.isFinite(v));
+  if (nums.length < 2) return svg;
+  const top = max ?? Math.max(...nums, 1);
+  const step = width / (values.length - 1);
+  const points = values.map((v, i) => {
+    const y = Number.isFinite(v) ? height - (Math.max(0, Math.min(top, v)) / top) * height : height;
+    return `${(i * step).toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", points);
+  line.setAttribute("fill", "none");
+  line.setAttribute("stroke", "currentColor");
+  line.setAttribute("stroke-width", "1.5");
+  svg.append(line);
+  return svg;
+}
+
+function liveMonitorContent(server) {
+  const nodes = [];
+  const samples = liveSamplesFor(server.id);
+  const latest = samples[samples.length - 1] || null;
+  const session = state.liveSession && state.liveSession.serverId === server.id ? state.liveSession : null;
+
+  const head = document.createElement("div");
+  head.className = "live-head";
+  const title = document.createElement("span");
+  title.className = "live-title";
+  title.textContent = "Live resources";
+  const status = document.createElement("span");
+  status.className = "live-status";
+  if (session) {
+    status.classList.add("on");
+    if (session.endsAt !== null) {
+      const left = Math.max(0, session.endsAt - Date.now());
+      const mm = Math.floor(left / 60000);
+      const ss = Math.floor((left % 60000) / 1000).toString().padStart(2, "0");
+      status.textContent = `● live · ${mm}:${ss} left`;
+    } else {
+      status.textContent = `● live · every ${Math.round(session.intervalMs / 1000)}s`;
+    }
+  } else {
+    status.textContent = latest ? "paused" : "press Refresh to start";
+  }
+  head.append(title, status);
+  nodes.push(head);
+
+  if (!latest) {
+    const hint = document.createElement("p");
+    hint.className = "live-hint";
+    hint.textContent = "Live CPU, memory, disk, and network for this server — sampled over SSH while the session runs.";
+    nodes.push(hint);
+    return nodes;
+  }
+
+  const bars = document.createElement("div");
+  bars.className = "usage-bars";
+  bars.append(usageBar("CPU", latest.cpu), usageBar("Memory", latest.mem), usageBar("Disk", latest.disk));
+  nodes.push(bars);
+
+  const net = document.createElement("div");
+  net.className = "live-net";
+  net.textContent = `↓ ${formatRate(latest.rx)}    ↑ ${formatRate(latest.tx)}`;
+  nodes.push(net);
+
+  const spark = document.createElement("div");
+  spark.className = "live-spark-row";
+  const sLabel = document.createElement("span");
+  sLabel.textContent = "CPU";
+  spark.append(sLabel, sparklineSvg(samples.map(s => s.cpu), { max: 100 }));
+  nodes.push(spark);
+
+  return nodes;
+}
+
+function renderLiveMonitor(server) {
+  const box = document.createElement("section");
+  box.className = "live-monitor";
+  box.id = "liveMonitor";
+  box.replaceChildren(...liveMonitorContent(server));
+  return box;
+}
+
 function renderOverviewPanel(server) {
   const wrapper = document.createElement("div");
   const metrics = metricValues(server);
@@ -1455,7 +2028,8 @@ function renderOverviewPanel(server) {
     metricBlock("OS", metrics.os),
     metricBlock("Last update", metrics.lastReport)
   );
-  wrapper.append(grid, renderOutput(server, "overview", overviewText(server, panelOutputFor(server, "overview", "Refresh this panel."))));
+  wrapper.append(grid, renderLiveMonitor(server));
+  wrapper.append(renderOutput(server, "overview", overviewText(server, panelOutputFor(server, "overview", "Refresh this panel."))));
   return wrapper;
 }
 
@@ -2016,6 +2590,7 @@ async function load() {
   state.sshKeys = sshKeys.keys || [];
   state.keyUploadDir = sshKeys.uploadDir || state.keyUploadDir;
   state.keyHostDir = sshKeys.hostDir || sshKeys.uploadDir || state.keyHostDir;
+  state.keyAccessCache = {};
   if (state.selectedId && !state.servers.some(server => server.id === state.selectedId)) {
     setSelectedId(null);
   }
@@ -2921,6 +3496,18 @@ elements.keyUploadCancel.addEventListener("click", closeKeyUpload);
 elements.keyUploadConfirm.addEventListener("click", confirmKeyUpload);
 elements.keyUploadOverlay.addEventListener("click", event => {
   if (event.target === elements.keyUploadOverlay) closeKeyUpload();
+});
+
+elements.exportCancel.addEventListener("click", closeExportDialog);
+elements.exportConfirm.addEventListener("click", confirmExport);
+elements.exportOverlay.addEventListener("click", event => {
+  if (event.target === elements.exportOverlay) closeExportDialog();
+});
+
+elements.importCancel.addEventListener("click", closeImportDialog);
+elements.importConfirm.addEventListener("click", () => confirmImport().catch(error => showToast(error.message)));
+elements.importOverlay.addEventListener("click", event => {
+  if (event.target === elements.importOverlay) closeImportDialog();
 });
 
 elements.unsavedSave.addEventListener("click", async () => {

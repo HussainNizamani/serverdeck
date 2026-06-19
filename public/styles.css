@@ -1894,6 +1894,128 @@ textarea {
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
 }
 
+.key-list-item.missing {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: var(--danger-soft, rgba(248, 113, 113, 0.1));
+}
+
+.key-list-item.missing .key-list-name {
+  color: var(--danger);
+}
+
+.key-status {
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin-top: 6px;
+}
+
+.key-status.too_open,
+.key-status.unreadable,
+.key-status.unreachable {
+  color: var(--danger);
+}
+
+.key-status.checking {
+  color: var(--muted);
+}
+
+.key-cmd {
+  align-items: center;
+  background: var(--surface, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 8px;
+  margin-top: 5px;
+  padding: 5px 8px;
+}
+
+.key-cmd code {
+  color: var(--text, inherit);
+  flex: 1;
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.key-cmd-copy {
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.key-cmd-copy:hover {
+  color: var(--text, inherit);
+}
+
+/* ============================================================
+   Export servers dialog
+   ============================================================ */
+
+.export-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 14px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.export-row {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text, inherit);
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.export-row:hover {
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.export-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  height: 15px;
+  width: 15px;
+}
+
+.export-row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-row .imp-meta {
+  color: var(--muted);
+  flex: 0 1 auto;
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.export-row.dup .imp-meta {
+  color: var(--danger);
+}
+
+.export-row.export-all {
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 0;
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-bottom: 9px;
+}
+
 .key-list-info {
   display: flex;
   flex-direction: column;
@@ -1913,6 +2035,129 @@ textarea {
   color: var(--accent);
   font-size: 15px;
   font-weight: 700;
+}
+
+/* ============================================================
+   Live resource monitor (Overview)
+   ============================================================ */
+
+.live-duration {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text, inherit);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.live-toggle.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.live-monitor {
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  margin: 14px 0;
+  padding: 14px 16px;
+}
+
+.live-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.live-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.live-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.live-status.on {
+  color: var(--accent);
+}
+
+.live-hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.usage-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usage-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.usage-label {
+  color: var(--muted);
+  font-size: 12px;
+  width: 56px;
+}
+
+.usage-track {
+  background: var(--line-soft);
+  border-radius: 999px;
+  flex: 1;
+  height: 8px;
+  overflow: hidden;
+}
+
+.usage-fill {
+  background: var(--accent);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  transition: width 0.4s ease;
+}
+
+.usage-fill.warm { background: #f59e0b; }
+.usage-fill.hot { background: #f0608c; }
+
+.usage-pct {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  width: 40px;
+}
+
+.live-net {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 12px;
+}
+
+.live-spark-row {
+  align-items: center;
+  color: var(--accent);
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.live-spark-row span {
+  color: var(--muted);
+  font-size: 12px;
+  width: 56px;
+}
+
+.live-spark {
+  height: 30px;
+  width: 140px;
 }
 
 .key-list-name {

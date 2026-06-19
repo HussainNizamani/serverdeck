@@ -50,13 +50,13 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
 - **Private by design** — the Docker port binds to localhost and your
   Tailscale IP only (never `0.0.0.0`), and the app itself rejects requests
   from non-allowlisted source networks.
-- **SSH keys, managed from the UI** — keep keys in one folder, `~/.serverdeck/keys`,
+- **SSH keys, managed from the UI** — keep keys in one folder (default `./keys`),
   then pick one or several per server by ticking them (Server Deck tries each until one
   authenticates). Upload keys from the browser (validated, gated behind a
-  warning), browse/download/rename/delete them in an in-app file manager, and
-  let the panel enforce `0700`/`0600` permissions automatically. OpenSSH and
-  PuTTY `.ppk` keys (converted in-memory via `puttygen`) are both supported,
-  with path remapping between host and container.
+  warning), or browse/download/rename/delete them in an in-app file manager.
+  Server Deck tightens permissions on keys it owns and, when a key is owned by
+  another user, shows the exact command to fix it. OpenSSH and PuTTY `.ppk` keys
+  (converted in-memory via `puttygen`) are both supported.
 - **Theming** — dark/light mode and five accent colors.
 
 ## Requirements
@@ -177,9 +177,8 @@ in `.env` (see `.env.example`); bare-metal installs export them directly.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SERVERDECK_TAILSCALE_IP` | `127.0.0.2` | Host IP to additionally publish port 8787 on. Set to this machine's Tailscale IP. The default is a loopback alias, i.e. effectively localhost-only. |
-| `SERVERDECK_KEY_DIR` | `./keys` | Host folder with SSH private keys, mounted read-write at `/keys` in the container. Shared with your host terminal; web uploads land here. Recommended: `$HOME/.serverdeck/keys`. |
-| `SERVERDECK_KEY_UPLOAD_DIR` | `/keys` | The single keys directory inside the container (the host folder is bind-mounted here). It is the **only** folder scanned for keys and where uploads land. |
-| `PUID` / `PGID` | `1000` / `1000` | Host UID/GID the container owns the keys folder as, so the same files are readable/manageable from your terminal. Set to your `id -u` / `id -g` if not 1000. |
+| `SERVERDECK_KEY_DIR` | `./keys` | Host folder with your SSH private keys, mounted read-write at `/keys`. The default `./keys` is resolved relative to the compose file (same with or without `sudo`) and persists across `docker compose down`. Set an absolute path to keep keys elsewhere. |
+| `SERVERDECK_KEY_UPLOAD_DIR` | `/keys` | The single keys directory **inside** the container (the host folder is bind-mounted here). The only folder scanned for keys and where uploads land. |
 | `SERVERDECK_KEY_PATH_REMAPS` | *(empty)* | Comma-separated `from=to` path prefixes applied when a saved key path does not exist, e.g. `/home/me/.ssh=/keys`. |
 | `SERVERDECK_DB_PASSWORD` | `serverdeck` | Password for the bundled PostgreSQL (not reachable from outside the compose network). |
 | `SERVERDECK_SECRET` | *(auto-generated key in DB)* | Secret used to encrypt saved SSH passwords. Set it (e.g. `openssl rand -hex 32`) to keep DB dumps un-decryptable on their own. |
@@ -193,9 +192,11 @@ in `.env` (see `.env.example`); bare-metal installs export them directly.
 ## SSH keys
 
 - Put the private keys Server Deck should use in the folder configured by
-  `SERVERDECK_KEY_DIR` (default: the repo's `keys/` folder), or point that
-  variable at a dedicated folder such as `$HOME/.serverdeck/keys`. This folder
-  is shared between your host terminal and the container.
+  `SERVERDECK_KEY_DIR` — by default `./keys`, next to `docker-compose.yml`. It's
+  resolved relative to the compose file (so `sudo` doesn't change it) and is a
+  bind mount, so it survives `docker compose down`. Set the variable to an
+  absolute path to keep keys elsewhere. This folder is shared between your host
+  terminal and the container.
 - Keys appear in the **SSH keys** list in SSH Settings. Recognized:
   `id_rsa`, `id_ed25519`, `id_ecdsa`, `*.pem`, `*.key`, `*.ppk`. Public keys,
   `known_hosts`, and `config` are ignored.
@@ -213,16 +214,16 @@ in `.env` (see `.env.example`); bare-metal installs export them directly.
   the local folder and locked to it). Browse, upload, download, rename, and
   delete keys there — no SSH/FTP session needed, since the folder is local to
   the panel.
-- **Permissions are enforced on the whole folder**: the container sets the
-  folder to `0700` and every private key to `0600` on boot and after each
-  upload/delete, so a key dropped in with loose modes is fixed automatically.
+- **Permissions.** Server Deck runs as uid 1000 (the container's `node` user).
+  Keys it owns that are too open are tightened to `0600` automatically; if a key
+  is owned by a different user (so Server Deck can't read it), the SSH Keys panel
+  shows the exact `sudo chown … && chmod 600 …` command to run. On the common
+  single-user host (uid 1000) it just works, no commands.
 - **PuTTY `.ppk` keys** are converted to OpenSSH format in-memory per
   connection via `puttygen` (preinstalled in the Docker image; package
   `putty-tools` on Debian/Ubuntu, `putty` on Fedora/Arch).
-- The keys folder is mounted **read-write** so uploads and permission
-  enforcement work. The container owns it as `PUID:PGID` (default `1000:1000`)
-  so the same files stay manageable from your host terminal — set those to your
-  `id -u`/`id -g` if your user isn't 1000.
+- The keys folder is mounted **read-write** so uploads and permission tightening
+  work.
 - On **SELinux** systems (Fedora, RHEL) the compose file mounts the key folder
   with the `:z` flag so the container may read it. If you manage mounts
   yourself, remember that flag.
@@ -404,12 +405,12 @@ afterwards.
 - SSH host keys are pinned on first connect (`accept-new`). `.ppk` conversion
   artifacts live in a `0600` temp dir and are removed immediately after the
   key is read into memory.
-- The app process runs as the unprivileged `node` user: the entrypoint starts
-  as root only to align the keys folder to your host UID/GID, then drops to
-  `node` (via `gosu`) before running the app. PostgreSQL has no published port.
-- The keys folder is mounted read-write (uploads need it) and locked down to
-  `0700`/`0600`. Uploaded keys are validated and never written outside the
-  folder; filenames are sanitized against path traversal.
+- The app process runs as the unprivileged `node` user (uid 1000); it never runs
+  as root. PostgreSQL has no published port.
+- The keys folder is mounted read-write (uploads need it). Uploaded keys are
+  validated, stored `0600`, and never written outside the folder; filenames are
+  sanitized against path traversal. Keys owned by another user aren't silently
+  loosened — the panel shows the exact `chown`/`chmod` command instead.
 
 Found a vulnerability? See [SECURITY.md](SECURITY.md).
 

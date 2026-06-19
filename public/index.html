@@ -289,6 +289,32 @@
       </div>
     </div>
 
+    <div id="exportOverlay" class="auth-overlay" hidden>
+      <div class="auth-card">
+        <h1>Export servers</h1>
+        <p class="auth-subtitle">Choose which servers to export. Connection settings only — passwords are not included.</p>
+        <div id="exportList" class="export-list"></div>
+        <p id="exportError" class="auth-error" hidden></p>
+        <div class="key-upload-actions">
+          <button type="button" id="exportCancel" class="secondary-button">Cancel</button>
+          <button type="button" id="exportConfirm" class="primary-button">Export</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="importOverlay" class="auth-overlay" hidden>
+      <div class="auth-card">
+        <h1>Import servers</h1>
+        <p class="auth-subtitle">Pick which to import and into which group. Duplicates (name already exists) are unchecked by default.</p>
+        <div id="importList" class="export-list"></div>
+        <p id="importError" class="auth-error" hidden></p>
+        <div class="key-upload-actions">
+          <button type="button" id="importCancel" class="secondary-button">Cancel</button>
+          <button type="button" id="importConfirm" class="primary-button">Import</button>
+        </div>
+      </div>
+    </div>
+
     <div id="toast" class="toast" hidden></div>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>

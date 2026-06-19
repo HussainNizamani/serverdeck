@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { commandForTask, shQuote } = require("../src/tasks");
+const { commandForTask, shQuote, parseMetrics } = require("../src/tasks");
 
 test("quotes shell arguments safely", () => {
   assert.equal(shQuote("alpha'beta"), "'alpha'\\''beta'");
@@ -34,4 +34,19 @@ test("rejects unknown tasks", () => {
 test("command task requires a command", () => {
   assert.throws(() => commandForTask({ task: "command", command: "  " }), /Command is required/);
   assert.match(commandForTask({ task: "command", command: "uptime" }), /uptime/);
+});
+
+test("parseMetrics reads the raw metrics block", () => {
+  const m = parseMetrics("cpu 123456 78901\nmem 41.2\ndisk 63\nnet 12345678 9012345\n");
+  assert.deepEqual(m.cpu, { total: 123456, idle: 78901 });
+  assert.equal(m.memPercent, 41.2);
+  assert.equal(m.diskPercent, 63);
+  assert.deepEqual(m.net, { rx: 12345678, tx: 9012345 });
+});
+
+test("parseMetrics tolerates missing lines", () => {
+  const m = parseMetrics("mem 50\n");
+  assert.equal(m.memPercent, 50);
+  assert.equal(m.cpu, null);
+  assert.equal(m.net, null);
 });

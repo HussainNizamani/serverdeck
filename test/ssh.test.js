@@ -67,6 +67,29 @@ test("adds multiple identity files when several keys are selected", () => {
   assert.ok(built.args.includes(k2));
 });
 
+test("skips a missing key and still uses the valid one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "serverdeck-key-"));
+  const good = path.join(dir, "good.key");
+  fs.writeFileSync(good, "key");
+  const missing = path.join(dir, "gone.key"); // never created
+  const built = buildSshArgs(
+    { host: "example.com", user: "root", port: 22, keyPath: `${missing}\n${good}` },
+    { command: "uptime" }
+  );
+
+  assert.equal(built.error, undefined);
+  assert.ok(built.args.includes(good));
+  assert.ok(!built.args.includes(missing));
+});
+
+test("errors only when none of the selected keys resolve", () => {
+  const built = buildSshArgs(
+    { host: "example.com", user: "root", port: 22, keyPath: "/nope/a.key\n/nope/b.key" },
+    { command: "uptime" }
+  );
+  assert.match(built.error, /SSH key was not found|No usable SSH key/);
+});
+
 test("remaps host key paths to container key paths", () => {
   const previous = process.env.SERVERDECK_KEY_PATH_REMAPS;
   process.env.SERVERDECK_KEY_PATH_REMAPS = "/home/exampleuser/keys=/keys";

@@ -1,6 +1,6 @@
 {
   "name": "serverdeck",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Self-hosted personal server management panel: SSH panels, real web terminal, SFTP file manager, monitoring agent, and Tailscale-only access.",
   "main": "server.js",
   "license": "Apache-2.0",
