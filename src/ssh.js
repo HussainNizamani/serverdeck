@@ -170,8 +170,7 @@ function validatePrivateKey(content) {
 
 // Locks down the key folder: 0700 on the directory, 0600 on every private key
 // inside it. Best-effort — a file the process cannot chmod (wrong owner) is
-// skipped rather than failing the whole sweep. Run after every upload/delete;
-// the container entrypoint runs the equivalent (as root) at boot.
+// skipped rather than failing the whole sweep. Run after every upload/delete.
 function enforceKeyPerms(dir = keyUploadDir()) {
   try {
     fs.chmodSync(dir, 0o700);
@@ -192,6 +191,84 @@ function enforceKeyPerms(dir = keyUploadDir()) {
       // Best effort — skip files this process does not own.
     }
   }
+}
+
+// Where the host keeps the keys folder, so a fix command points at the path the
+// user actually runs chown/chmod on (the container only sees /keys).
+function keyHostPath(containerPath) {
+  const dir = keyUploadDir();
+  const hostDir = process.env.SERVERDECK_KEY_HOST_DIR || dir;
+  if (containerPath === dir) return hostDir;
+  if (containerPath.startsWith(`${dir}/`)) return `${hostDir}${containerPath.slice(dir.length)}`;
+  return containerPath;
+}
+
+// Reports whether Server Deck can actually use a key on disk and, when it
+// can't, the exact command to fix it. Reading a 0600 key requires ownership;
+// the OpenSSH binary additionally refuses group/world-readable keys. Keys we
+// own that are too open are tightened automatically ("adjust accordingly").
+// Statuses: none | ok | secured | too_open | unreadable | unreachable.
+function keyAccess(rawPath) {
+  const raw = String(rawPath || "").trim();
+  if (!raw) return { status: "none" };
+
+  const requested = expandHome(raw);
+  const resolved = fs.existsSync(requested) ? requested : remapKeyPath(requested);
+  if (!fs.existsSync(resolved)) {
+    return {
+      status: "unreachable",
+      message: "Server Deck can't see this path. Put the key in the keys folder, or mount its folder into the container."
+    };
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const gid = typeof process.getgid === "function" ? process.getgid() : null;
+  const hostPath = keyHostPath(resolved);
+  const chownCmd = uid !== null
+    ? `sudo chown ${uid}:${gid} ${hostPath} && chmod 600 ${hostPath}`
+    : `chmod 600 ${hostPath}`;
+
+  let readable = true;
+  try {
+    fs.accessSync(resolved, fs.constants.R_OK);
+  } catch {
+    readable = false;
+  }
+  if (!readable) {
+    return {
+      status: "unreadable",
+      message: "Server Deck can't read this key — it's owned by another user. Hand it over with:",
+      command: chownCmd
+    };
+  }
+
+  // PPK keys are converted to a fresh 0600 temp before use, so their on-disk
+  // mode is irrelevant — being readable is enough.
+  if (/\.ppk$/i.test(resolved)) return { status: "ok" };
+
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    return { status: "ok" };
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    const ownedByUs = uid !== null && stat.uid === uid;
+    if (ownedByUs) {
+      try {
+        fs.chmodSync(resolved, 0o600);
+        return { status: "secured" };
+      } catch {
+        // fall through to the command hint
+      }
+    }
+    return {
+      status: "too_open",
+      message: "This key is readable by other users; SSH will refuse it. Lock it down with:",
+      command: ownedByUs ? `chmod 600 ${hostPath}` : chownCmd
+    };
+  }
+  return { status: "ok" };
 }
 
 function hasPuttygen() {
@@ -277,16 +354,23 @@ function resolveIdentities(server) {
 
   const args = [];
   const cleanups = [];
+  let firstError = null;
   const cleanup = () => cleanups.forEach(fn => fn());
   for (const keyPath of paths) {
     const identity = resolveIdentity({ keyPath });
     if (identity.error) {
+      // Skip a missing/unresolvable key and try the rest — a stale or moved key
+      // must not take down a connection that has other valid keys.
       identity.cleanup();
-      cleanup();
-      return { args: [], cleanup: noop, error: identity.error };
+      if (!firstError) firstError = identity.error;
+      continue;
     }
     args.push(...identity.args);
     cleanups.push(identity.cleanup);
+  }
+  if (!args.length) {
+    cleanup();
+    return { args: [], cleanup: noop, error: firstError || "No usable SSH key was found" };
   }
   return { args, cleanup };
 }
@@ -401,6 +485,7 @@ module.exports = {
   enforceKeyPerms,
   expandHome,
   hasPuttygen,
+  keyAccess,
   keyUploadDir,
   listSshKeys,
   looksLikeKeyFilename,

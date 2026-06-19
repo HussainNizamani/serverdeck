@@ -34,11 +34,6 @@ services:
       # Example: /home/me/.ssh=/keys means a server saved with the key
       # /home/me/.ssh/id_ed25519 resolves to /keys/id_ed25519 in the container.
       SERVERDECK_KEY_PATH_REMAPS: ${SERVERDECK_KEY_PATH_REMAPS:-}
-      # Host UID/GID the container should own the shared keys folder as, so the
-      # same files are readable/manageable from your host terminal. Set these
-      # in .env to `id -u` / `id -g` if your user isn't 1000.
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
       # Source networks allowed to reach the panel (comma-separated CIDRs).
       # Default: loopback, Tailscale CGNAT (100.64.0.0/10), and private
       # ranges (private ranges are required because Docker NAT rewrites the
@@ -57,11 +52,12 @@ services:
       - "127.0.0.1:8787:8787"
       - "${SERVERDECK_TAILSCALE_IP:-127.0.0.2}:8787:8787"
     volumes:
-      # Host folder with your SSH private keys, mounted read-write at /keys so
-      # web uploads can be written and permissions enforced. Manage the same
-      # keys from your terminal in this folder. Recommended host path:
-      # SERVERDECK_KEY_DIR=$HOME/.serverdeck/keys (see .env.example).
-      # The :z suffix relabels the folder on SELinux systems (Fedora/RHEL).
+      # Your SSH private keys, mounted read-write at /keys. Defaults to ./keys
+      # (next to this file): resolved relative to the compose file, so it's the
+      # same with or without sudo, and a bind mount — it survives
+      # `docker compose down`. Manage it on the host, over the host's SFTP, or in
+      # the in-app key browser. Override with SERVERDECK_KEY_DIR=<absolute path>
+      # (see .env.example). The :z suffix relabels for SELinux (Fedora/RHEL).
       - ${SERVERDECK_KEY_DIR:-./keys}:/keys:rw,z
     depends_on:
       postgres:

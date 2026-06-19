@@ -7,13 +7,14 @@ const {
   hasPuttygen,
   listSshKeys,
   keyUploadDir,
+  keyAccess,
   enforceKeyPerms,
   sanitizeKeyName,
   validatePrivateKey,
   looksLikeKeyFilename
 } = require("./src/ssh");
 const ssh2 = require("./src/ssh2-client");
-const { TASKS, runServerTask } = require("./src/tasks");
+const { TASKS, runServerTask, collectMetrics } = require("./src/tasks");
 const { acceptWebSocket } = require("./src/ws");
 const { createAuth, parseAllowedNetworks, isIpAllowed, DEFAULT_ALLOW_NETWORKS } = require("./src/auth");
 const { createSecrets } = require("./src/secrets");
@@ -329,8 +330,15 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/ssh-keys") {
+      // Access-check a single arbitrary path (used by the UI for custom/selected
+      // keys that aren't in the discovered folder).
+      const check = url.searchParams.get("check");
+      if (check) {
+        sendJson(res, 200, { access: keyAccess(check) });
+        return;
+      }
       sendJson(res, 200, {
-        keys: listSshKeys(),
+        keys: listSshKeys().map(key => ({ ...key, access: keyAccess(key.path) })),
         uploadDir: keyUploadDir(),
         // Host-side path of the shared folder (for the "Open folder" sftp:// link).
         // Falls back to the container path for bare-metal runs where they match.
@@ -523,6 +531,19 @@ async function handleApi(req, res, url) {
     const sftpMatch = url.pathname.match(/^\/api\/servers\/([^/]+)\/sftp\/(list|download|upload|mkdir|rename|delete)$/);
     if (sftpMatch) {
       await handleSftpApi(req, res, url, sftpMatch[1], sftpMatch[2]);
+      return;
+    }
+
+    // Lightweight live metrics for the dashboard — deliberately NOT recorded to
+    // history (it's polled every few seconds while the Overview is watched).
+    const metricsServerId = parseServerIdFromPath(url.pathname, "/api/servers/", "/metrics");
+    if (req.method === "GET" && metricsServerId) {
+      const server = await store.getServer(metricsServerId);
+      if (!server) {
+        sendJson(res, 404, { error: "Server not found" });
+        return;
+      }
+      sendJson(res, 200, await collectMetrics(await withServerPassword(server)));
       return;
     }
 

@@ -4,6 +4,46 @@ All notable changes to Server Deck are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-06-18
+
+### Added
+
+- **Live resource monitor** in the Overview tab. Press Refresh to start a live
+  session that polls the selected server every few seconds and shows CPU,
+  memory, disk, and network as usage bars plus a CPU sparkline — CPU% and
+  network throughput are computed as deltas between samples (no remote `sleep`,
+  no agent required). Non-agent servers get a time-boxed session (a duration
+  picker left of Refresh, auto-stops with a countdown); agent servers get a
+  continuous refresh-interval with an optional session-length toggle.
+- **SSH Settings safeguards** — you're prompted before leaving with unsaved
+  changes, so in-progress edits aren't lost.
+- **Export / import servers** (Settings → Backup). Export all or a selected
+  subset to JSON (connection settings only — passwords excluded; group exported
+  by name). Import opens a preview dialog listing each server and its group with
+  per-row checkboxes; duplicates (a name that already exists) are flagged and
+  left unchecked.
+- **Per-key permission diagnostics.** The SSH Keys list shows each key's access
+  status. Keys Server Deck owns that are too open are tightened to `0600`
+  automatically; when a key is owned by another user (or sits outside the keys
+  folder), the panel shows the exact `sudo chown … && chmod 600 …` command — or
+  a mount hint — to fix it.
+
+### Changed
+
+- **Keys folder defaults to `./keys`** (next to `docker-compose.yml`). It's
+  resolved relative to the compose file, so it's identical with or without
+  `sudo`, and it's a bind mount, so it survives `docker compose down`. Set
+  `SERVERDECK_KEY_DIR` to an absolute path to use a different folder. (Dropped
+  the `~/.serverdeck/keys` recommendation, which broke under `sudo`.)
+- **Removed the UID-aligning entrypoint.** The container runs as the
+  unprivileged `node` user again (no root entrypoint, `gosu`, or `PUID`/`PGID`).
+  Permission mismatches are surfaced as copy-paste commands instead of being
+  force-`chown`ed.
+- **Multi-key auth is resilient** — a missing or unreadable selected key is
+  skipped and the remaining keys are tried, instead of failing the whole
+  connection. Selected keys that aren't in the folder are shown as removable
+  rows with their access status.
+
 ## [1.2.0] - 2026-06-15
 
 ### Added

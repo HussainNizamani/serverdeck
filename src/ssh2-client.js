@@ -17,11 +17,15 @@ function baseConfig(server) {
 // their temp files removed immediately, so nothing lingers on disk.
 function keyBuffers(server) {
   const buffers = [];
-  for (const keyPath of splitKeyPaths(server.keyPath)) {
+  const paths = splitKeyPaths(server.keyPath);
+  let firstError = null;
+  for (const keyPath of paths) {
     const identity = resolveIdentity({ keyPath });
     if (identity.error) {
+      // Skip a missing/unresolvable key and try the rest.
       identity.cleanup();
-      throw new Error(identity.error);
+      if (!firstError) firstError = identity.error;
+      continue;
     }
     const keyFile = identity.args[1];
     if (!keyFile) {
@@ -34,6 +38,8 @@ function keyBuffers(server) {
       identity.cleanup();
     }
   }
+  // Keys were selected but none resolved — surface that instead of failing later.
+  if (paths.length && !buffers.length && firstError) throw new Error(firstError);
   return buffers;
 }
 
