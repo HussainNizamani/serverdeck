@@ -253,6 +253,11 @@
           <button id="authSubmit" class="primary-button" type="submit">Sign in</button>
           <p id="authError" class="auth-error" hidden></p>
         </form>
+        <details id="authForgot" class="auth-recover">
+          <summary>Forgot password?</summary>
+          <p>There's no email reset — reset it from the panel host (prints a temporary password if you omit one):</p>
+          <code>docker compose exec app node scripts/reset-admin.js you@example.com</code>
+        </details>
         <p class="auth-footnote">Access is restricted to localhost and your Tailscale network.</p>
       </div>
     </div>
@@ -305,7 +310,7 @@
     <div id="importOverlay" class="auth-overlay" hidden>
       <div class="auth-card">
         <h1>Import servers</h1>
-        <p class="auth-subtitle">Pick which to import and into which group. Duplicates (name already exists) are unchecked by default.</p>
+        <p class="auth-subtitle">Choose which groups and servers to import. Unchecked groups still import their servers, just ungrouped. Duplicate servers (name already exists) are unchecked by default.</p>
         <div id="importList" class="export-list"></div>
         <p id="importError" class="auth-error" hidden></p>
         <div class="key-upload-actions">
