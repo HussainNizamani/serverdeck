@@ -1420,6 +1420,35 @@ textarea {
   z-index: 100;
 }
 
+/* Modal dialogs open over the live app — blur the page behind instead of
+   painting it solid (the login/setup overlay keeps its opaque background). */
+#exportOverlay,
+#importOverlay {
+  background: rgba(8, 11, 18, 0.45);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Size the card to its content (the longest server row) so names show in full
+   with the checkbox right after — capped to the viewport so it stays responsive.
+   The subtitle is held narrow so it wraps instead of stretching the card. */
+#exportOverlay .auth-card,
+#importOverlay .auth-card {
+  width: fit-content;
+  max-width: min(92vw, 640px);
+}
+
+#exportOverlay .auth-subtitle,
+#importOverlay .auth-subtitle {
+  max-width: 360px;
+}
+
+@media (max-width: 480px) {
+  .auth-overlay {
+    padding: 12px;
+  }
+}
+
 .auth-card {
   background: var(--surface);
   border: 1px solid var(--line-soft);
@@ -1475,6 +1504,32 @@ textarea {
   font-size: 11.5px;
   margin: 18px 0 0;
   text-align: center;
+}
+
+.auth-recover {
+  font-size: 12px;
+  margin-top: 16px;
+}
+
+.auth-recover summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.auth-recover p {
+  color: var(--muted);
+  margin: 8px 0 6px;
+}
+
+.auth-recover code {
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
 }
 
 /* ============================================================
@@ -1964,6 +2019,10 @@ textarea {
   margin: 4px 0 14px;
   max-height: 320px;
   overflow-y: auto;
+  /* Shrink to the longest row so the checkbox sits just after the names
+     column (with the row's 10px gap), instead of spanning the whole card. */
+  width: fit-content;
+  max-width: 100%;
 }
 
 .export-row {
@@ -1972,6 +2031,7 @@ textarea {
   color: var(--text, inherit);
   cursor: pointer;
   display: flex;
+  flex-direction: row; /* override global `label { flex-direction: column }` */
   font-size: 13px;
   gap: 10px;
   justify-content: space-between;
@@ -2014,6 +2074,15 @@ textarea {
   font-weight: 600;
   margin-bottom: 4px;
   padding-bottom: 9px;
+}
+
+.export-row.export-group {
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.export-row.export-child {
+  padding-left: 24px;
 }
 
 .key-list-info {
