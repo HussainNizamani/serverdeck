@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { createStore } = require("./src/store");
 const { createPostgresStore } = require("./src/postgres-store");
 const {
@@ -18,6 +19,7 @@ const { TASKS, runServerTask, collectMetrics } = require("./src/tasks");
 const { acceptWebSocket } = require("./src/ws");
 const { createAuth, parseAllowedNetworks, isIpAllowed, DEFAULT_ALLOW_NETWORKS } = require("./src/auth");
 const { createSecrets } = require("./src/secrets");
+const { createOpencodeHub } = require("./src/opencode-hub");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -36,6 +38,7 @@ const store = DATABASE_URL
 
 const auth = createAuth(store);
 const secrets = createSecrets(store);
+const opencodeHub = createOpencodeHub({ store });
 
 // Server records keep SSH passwords encrypted in `passwordEnc`. The API never
 // exposes that field — clients only see a hasPassword flag.
@@ -324,8 +327,49 @@ async function handleApi(req, res, url) {
         storage: {
           provider: STORAGE_PROVIDER,
           history: "Task refreshes and agent reports are persisted with timestamps."
-        }
+        },
+        opencode: true
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/opencode/machines") {
+      const state = await opencodeHub.state();
+      const online = new Set(state.machines.filter(machine => machine.online).map(machine => machine.id));
+      const machines = (await store.listOpencodeMachines()).map(({ id, name, createdAt, lastSeen, revoked }) => ({ id, name, createdAt, lastSeen, revoked, online: online.has(id) }));
+      sendJson(res, 200, { machines });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/opencode/machines") {
+      const body = await readJson(req);
+      const name = String(body.name || "").trim();
+      if (!name) { sendJson(res, 400, { error: "Machine name is required" }); return; }
+      const token = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      const machine = await store.addOpencodeMachine({ name, tokenHash });
+      sendJson(res, 201, { id: machine.id, name: machine.name, token });
+      return;
+    }
+    const opencodeMachineId = parseServerIdFromPath(url.pathname, "/api/opencode/machines/", "/revoke");
+    if (req.method === "POST" && opencodeMachineId && url.pathname.endsWith("/revoke")) {
+      const machine = await store.updateOpencodeMachine(opencodeMachineId, { revoked: true });
+      if (!machine) { sendJson(res, 404, { error: "Machine not found" }); return; }
+      opencodeHub.disconnectMachine(opencodeMachineId);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    const opencodeDeleteId = parseServerIdFromPath(url.pathname, "/api/opencode/machines/");
+    if (req.method === "DELETE" && opencodeDeleteId) {
+      const deleted = await store.deleteOpencodeMachine(opencodeDeleteId);
+      opencodeHub.disconnectMachine(opencodeDeleteId);
+      sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { error: "Machine not found" });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/opencode/sessions") {
+      const state = await opencodeHub.state();
+      const online = new Set(state.machines.flatMap(machine => machine.sessions.filter(session => session.online).map(session => `${machine.id}:${session.id}`)));
+      const sessions = (await store.listOpencodeSessions()).map(session => ({ ...session, online: online.has(`${session.machineId}:${session.id}`) }));
+      sendJson(res, 200, { sessions });
       return;
     }
 
@@ -978,6 +1022,19 @@ server.on("upgrade", (req, socket) => {
       socket.write(`HTTP/1.1 500 Internal Server Error\r\n\r\n${err.message || "Server error"}`);
       socket.destroy();
     });
+    return;
+  }
+  if (url.pathname === "/ws/opencode-agent") {
+    const ws = acceptWebSocket(req, socket);
+    if (ws) opencodeHub.handleAgentSocket(ws);
+    return;
+  }
+  if (url.pathname === "/ws/opencode-ui") {
+    auth.sessionFromRequest(req).then(session => {
+      if (!session) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); socket.destroy(); return; }
+      const ws = acceptWebSocket(req, socket);
+      if (ws) opencodeHub.handleUiSocket(ws, session);
+    }).catch(() => socket.destroy());
     return;
   }
   socket.write("HTTP/1.1 404 Not Found\r\n\r\n");

@@ -90,7 +90,9 @@ function createEmptyState() {
     updatedAt: nowIso(),
     groups: [],
     servers: [],
-    settings: {}
+    settings: {},
+    opencodeMachines: [],
+    opencodeSessions: []
   };
 }
 
@@ -138,6 +140,8 @@ function createStore(filePath) {
     state.groups = Array.isArray(state.groups) ? state.groups : [];
     state.servers = Array.isArray(state.servers) ? state.servers.map(normalizeServerRecord) : [];
     state.settings = state.settings && typeof state.settings === "object" ? state.settings : {};
+    state.opencodeMachines = Array.isArray(state.opencodeMachines) ? state.opencodeMachines : [];
+    state.opencodeSessions = Array.isArray(state.opencodeSessions) ? state.opencodeSessions : [];
     save();
     return clone(state);
   }
@@ -339,6 +343,22 @@ function createStore(filePath) {
     return clone(value);
   }
 
+  function listOpencodeMachines() { return clone(state.opencodeMachines); }
+  function addOpencodeMachine(input = {}) {
+    const createdAt = nowIso();
+    const machine = { id: crypto.randomUUID(), name: String(input.name || "OpenCode machine").trim() || "OpenCode machine", tokenHash: String(input.tokenHash || ""), createdAt, lastSeen: null, revoked: false };
+    state.opencodeMachines.push(machine); save(); return clone(machine);
+  }
+  function updateOpencodeMachine(id, input = {}) {
+    const index = state.opencodeMachines.findIndex(item => item.id === id); if (index < 0) return null;
+    state.opencodeMachines[index] = { ...state.opencodeMachines[index], ...input, id }; save(); return clone(state.opencodeMachines[index]);
+  }
+  function deleteOpencodeMachine(id) { const index = state.opencodeMachines.findIndex(item => item.id === id); if (index < 0) return false; state.opencodeMachines.splice(index, 1); state.opencodeSessions = state.opencodeSessions.filter(item => item.machineId !== id); save(); return true; }
+  function findOpencodeMachineByTokenHash(tokenHash) { const machine = state.opencodeMachines.find(item => item.tokenHash === tokenHash); return machine ? clone(machine) : null; }
+  function upsertOpencodeSession(input = {}) { const index = state.opencodeSessions.findIndex(item => item.id === input.id && item.machineId === input.machineId); const record = { id: String(input.id), machineId: String(input.machineId), title: String(input.title || "Untitled"), directory: String(input.directory || ""), updatedAt: input.updatedAt || nowIso(), snapshot: Array.isArray(input.snapshot) ? clone(input.snapshot) : [] }; if (index < 0) state.opencodeSessions.push(record); else state.opencodeSessions[index] = record; save(); return clone(record); }
+  function listOpencodeSessions() { return clone(state.opencodeSessions); }
+  function deleteOpencodeSession(id) { const index = state.opencodeSessions.findIndex(item => item.id === id); if (index < 0) return false; state.opencodeSessions.splice(index, 1); save(); return true; }
+
   return {
     load,
     getSetting,
@@ -354,7 +374,9 @@ function createStore(filePath) {
     deleteServer,
     recordReport,
     recordTaskRun,
-    listTaskHistory
+    listTaskHistory,
+    listOpencodeMachines, addOpencodeMachine, updateOpencodeMachine, deleteOpencodeMachine, findOpencodeMachineByTokenHash,
+    upsertOpencodeSession, listOpencodeSessions, deleteOpencodeSession
   };
 }
 

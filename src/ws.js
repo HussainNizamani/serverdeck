@@ -88,11 +88,17 @@ function acceptWebSocket(req, socket) {
   const closeHandlers = new Set();
   let closed = false;
 
-  function close() {
+  function close(code) {
     if (closed) return;
     closed = true;
     try {
-      socket.end(Buffer.from([0x88, 0x00]));
+      if (Number.isInteger(code)) {
+        const payload = Buffer.alloc(2);
+        payload.writeUInt16BE(code, 0);
+        socket.end(Buffer.concat([Buffer.from([0x88, 0x02]), payload]));
+      } else {
+        socket.end(Buffer.from([0x88, 0x00]));
+      }
     } catch {
       socket.destroy();
     }

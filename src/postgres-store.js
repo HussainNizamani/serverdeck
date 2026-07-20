@@ -114,6 +114,8 @@ function createPostgresStore(options = {}) {
         updated_at timestamptz not null
       )
     `);
+    await query("create table if not exists opencode_machines (id uuid primary key, name text not null, token_hash text not null, created_at timestamptz not null, last_seen timestamptz, revoked boolean not null default false)");
+    await query("create table if not exists opencode_sessions (id text not null, machine_id uuid not null references opencode_machines(id) on delete cascade, title text not null, directory text not null, updated_at timestamptz not null, snapshot jsonb not null default '[]', primary key (id, machine_id))");
     return { ok: true };
   }
 
@@ -388,6 +390,17 @@ function createPostgresStore(options = {}) {
     return result.rows.map(taskRunFromRow);
   }
 
+  function machineFromRow(row) { return row && { id: row.id, name: row.name, tokenHash: row.token_hash, createdAt: toIso(row.created_at), lastSeen: toIso(row.last_seen), revoked: row.revoked }; }
+  function sessionFromRow(row) { return row && { id: row.id, machineId: row.machine_id, title: row.title, directory: row.directory, updatedAt: toIso(row.updated_at), snapshot: row.snapshot || [] }; }
+  async function listOpencodeMachines() { return (await query("select * from opencode_machines order by created_at desc")).rows.map(machineFromRow); }
+  async function addOpencodeMachine(input = {}) { const at = nowIso(); return machineFromRow((await query("insert into opencode_machines (id,name,token_hash,created_at,revoked) values ($1,$2,$3,$4,false) returning *", [crypto.randomUUID(), String(input.name || "OpenCode machine").trim() || "OpenCode machine", String(input.tokenHash || ""), at])).rows[0]); }
+  async function updateOpencodeMachine(id, input = {}) { const old = await query("select * from opencode_machines where id=$1", [id]); if (!old.rows[0]) return null; const row = old.rows[0]; return machineFromRow((await query("update opencode_machines set name=$2, token_hash=$3, last_seen=$4, revoked=$5 where id=$1 returning *", [id, input.name ?? row.name, input.tokenHash ?? row.token_hash, input.lastSeen ?? row.last_seen, input.revoked ?? row.revoked])).rows[0]); }
+  async function deleteOpencodeMachine(id) { return (await query("delete from opencode_machines where id=$1", [id])).rowCount > 0; }
+  async function findOpencodeMachineByTokenHash(tokenHash) { return machineFromRow((await query("select * from opencode_machines where token_hash=$1", [tokenHash])).rows[0]); }
+  async function upsertOpencodeSession(input = {}) { return sessionFromRow((await query("insert into opencode_sessions (id,machine_id,title,directory,updated_at,snapshot) values ($1,$2,$3,$4,$5,$6) on conflict (id,machine_id) do update set title=$3,directory=$4,updated_at=$5,snapshot=$6 returning *", [String(input.id), input.machineId, String(input.title || "Untitled"), String(input.directory || ""), input.updatedAt || nowIso(), JSON.stringify(Array.isArray(input.snapshot) ? input.snapshot : [])])).rows[0]); }
+  async function listOpencodeSessions() { return (await query("select * from opencode_sessions order by updated_at desc")).rows.map(sessionFromRow); }
+  async function deleteOpencodeSession(id) { return (await query("delete from opencode_sessions where id=$1", [id])).rowCount > 0; }
+
   return {
     load,
     getSetting,
@@ -403,7 +416,9 @@ function createPostgresStore(options = {}) {
     deleteServer,
     recordReport,
     recordTaskRun,
-    listTaskHistory
+    listTaskHistory,
+    listOpencodeMachines, addOpencodeMachine, updateOpencodeMachine, deleteOpencodeMachine, findOpencodeMachineByTokenHash,
+    upsertOpencodeSession, listOpencodeSessions, deleteOpencodeSession
   };
 }
 

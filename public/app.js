@@ -13,13 +13,14 @@ const OPS = [
   { id: "command", label: "Command", meta: "Run a remote shell command" },
   { id: "settings", label: "SSH Settings", meta: "Server connection, group, notes, and agent install" },
   { id: "multiterm", label: "Terminal", meta: "SSH terminals — one or up to 10 side by side, across servers" },
+  { id: "opencode", label: "OpenCode", meta: "Live remote AI coding sessions" },
   { id: "panel", label: "Settings", meta: "Panel appearance, account, and authentication" }
 ];
 
 const NAV_SECTIONS = [
   { label: "Monitor", ids: ["overview", "services", "logs", "processes"] },
   { label: "System", ids: ["storage", "network", "updates", "containers", "users", "security"] },
-  { label: "Tools", ids: ["files", "command", "multiterm"] },
+  { label: "Tools", ids: ["files", "command", "multiterm", "opencode"] },
   { label: "Manage", ids: ["settings", "panel"] }
 ];
 
@@ -39,7 +40,8 @@ const OP_ICONS = {
   terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
   multiterm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
-  panel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'
+  panel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+  opencode: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M7 21h10M12 17v4M7 9l2 2-2 2M12 13h4"/></svg>'
 };
 
 const STORAGE_KEYS = {
@@ -112,7 +114,8 @@ const state = {
   busyKeys: {},
   authStatus: null,
   totpSetup: null,
-  sftp: {}
+  sftp: {},
+  oc: { machines: [], sessions: [], selected: null, messages: [], socket: null, busy: false, reconnect: 500, permissions: [] }
 };
 
 const elements = {
@@ -1074,6 +1077,12 @@ function renderDetails() {
     elements.deleteServerButton.disabled = true;
     return;
   }
+  if (state.activeOps === "opencode" && !state.draftNew) {
+    elements.selectedTitle.textContent = "OpenCode";
+    elements.selectedMeta.textContent = "Remote AI coding sessions";
+    elements.openTerminalButton.disabled = true; elements.deleteServerButton.disabled = true;
+    return;
+  }
 
   if (state.draftNew) {
     elements.selectedTitle.textContent = "New server";
@@ -1137,6 +1146,7 @@ function renderContent() {
     elements.contentPane.append(renderKeyFilesPanel());
     return;
   }
+  if (state.activeOps === "opencode") { elements.contentPane.append(renderOpenCodePanel()); connectOpenCode(); return; }
 
   const server = selectedServer();
 
@@ -1225,6 +1235,69 @@ function renderContent() {
   }
 
   elements.contentPane.append(panel);
+}
+
+/* ---------- OpenCode remote sessions ---------- */
+function ocSend(message) { if (state.oc.socket?.readyState === WebSocket.OPEN) state.oc.socket.send(JSON.stringify(message)); else showToast("OpenCode is disconnected."); }
+function ocRelative(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value || 0)) / 1000)); return seconds < 60 ? "now" : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : `${Math.floor(seconds / 3600)}h ago`; }
+function ocEscape(value) { const node = document.createElement("span"); node.textContent = String(value || ""); return node.innerHTML; }
+function ocMarkdown(text) { return ocEscape(text).replace(/```([\s\S]*?)```/g, "<pre>$1</pre>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\n/g, "<br>"); }
+function connectOpenCode() {
+  if (state.oc.socket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(state.oc.socket.readyState)) return;
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const socket = state.oc.socket = new WebSocket(`${scheme}://${location.host}/ws/opencode-ui`);
+  socket.onopen = () => { state.oc.reconnect = 500; if (state.oc.selected) ocSend({ type: "subscribe", ...state.oc.selected }); };
+  socket.onclose = () => { state.oc.socket = null; if (state.activeOps === "opencode") setTimeout(connectOpenCode, state.oc.reconnect = Math.min(state.oc.reconnect * 2, 10000)); };
+  socket.onmessage = event => { const message = JSON.parse(event.data); handleOpenCodeMessage(message); };
+}
+function handleOpenCodeMessage(message) {
+  if (message.type === "state") { state.oc.machines = message.machines || []; renderContent(); return; }
+  if (message.type === "snapshot" && state.oc.selected?.sessionID === message.sessionID) { state.oc.messages = message.messages || []; renderContent(); return; }
+  if (message.type === "event" && state.oc.selected?.sessionID === message.sessionID) { applyOpenCodeEvent(message.event); renderContent(); return; }
+  if (message.type === "error" || (message.type === "ack" && !message.ok)) showToast(message.error || message.message || "OpenCode request failed");
+}
+function applyOpenCodeEvent(event) {
+  const properties = event?.properties || {};
+  if (event?.type === "session.idle") state.oc.busy = false;
+  if (event?.type === "permission.updated" && properties.id) state.oc.permissions = [properties];
+  if (event?.type === "permission.replied") state.oc.permissions = [];
+  if (event?.type === "message.updated" && properties.info) { const i = state.oc.messages.findIndex(item => item.info?.id === properties.info.id); const item = { info: properties.info, parts: i < 0 ? [] : state.oc.messages[i].parts }; if (i < 0) state.oc.messages.push(item); else state.oc.messages[i] = item; state.oc.busy = true; }
+  if (event?.type === "message.removed") state.oc.messages = state.oc.messages.filter(item => item.info?.id !== (properties.info?.id || properties.messageID));
+  if (event?.type === "message.part.updated" && properties.part) { const part = properties.part; const message = state.oc.messages.find(item => item.info?.id === part.messageID); if (message) { const i = (message.parts || []).findIndex(item => item.id === part.id); if (i < 0) message.parts.push(part); else message.parts[i] = part; } }
+  if (event?.type === "message.part.removed") for (const message of state.oc.messages) message.parts = (message.parts || []).filter(part => part.id !== (properties.part?.id || properties.partID));
+}
+function renderOpenCodePanel() {
+  const root = document.createElement("section"); root.className = "oc-layout";
+  const list = document.createElement("aside"); list.className = "oc-list";
+  const add = actionButton("+ Add machine", "secondary-button", async () => {
+    const name = window.prompt("Machine name"); if (!name) return;
+    try { const machine = await api("/api/opencode/machines", { method: "POST", body: JSON.stringify({ name }) }); window.prompt("Copy this token now. Paste it into ~/.config/opencode/serverdeck-remote.json", machine.token); } catch (error) { showToast(error.message); }
+  }); list.append(add);
+  for (const machine of state.oc.machines) {
+    const machineRow = document.createElement("div"); machineRow.className = "oc-machine";
+    machineRow.innerHTML = `<span class="oc-dot ${machine.online ? "online" : ""}"></span><strong>${ocEscape(machine.name)}</strong>`;
+    const actions = document.createElement("button"); actions.className = "oc-menu"; actions.textContent = "⋮"; actions.onclick = async () => { const action = window.prompt("Type revoke or delete"); if (!action) return; try { await api(`/api/opencode/machines/${machine.id}${action === "revoke" ? "/revoke" : ""}`, { method: action === "revoke" ? "POST" : "DELETE" }); } catch (error) { showToast(error.message); } }; machineRow.append(actions); list.append(machineRow);
+    for (const session of machine.sessions || []) { const button = document.createElement("button"); button.className = `oc-session ${state.oc.selected?.sessionID === session.id ? "selected" : ""}`; button.innerHTML = `<strong>${ocEscape(session.title || "Untitled")}</strong><small>${ocEscape((session.directory || "").split("/").filter(Boolean).pop() || "") } · ${ocRelative(session.updatedAt)}</small>`; button.onclick = () => { state.oc.selected = { machineId: machine.id, sessionID: session.id }; state.oc.messages = []; state.oc.permissions = []; ocSend({ type: "subscribe", ...state.oc.selected }); renderContent(); }; list.append(button); }
+  }
+  const chat = document.createElement("main"); chat.className = "oc-chat";
+  if (!state.oc.selected) chat.innerHTML = '<div class="oc-empty">Select an OpenCode session to mirror it live.</div>';
+  else {
+    const messages = document.createElement("div"); messages.className = "oc-messages";
+    for (const message of state.oc.messages) messages.append(renderOpenCodeMessage(message));
+    for (const permission of state.oc.permissions) { const banner = document.createElement("div"); banner.className = "oc-permission"; banner.textContent = permission.title || permission.type || "Permission requested"; for (const [label, response] of [["Allow once", "once"], ["Always", "always"], ["Deny", "reject"]]) banner.append(actionButton(label, response === "reject" ? "danger-button" : "secondary-button", () => { ocSend({ type: "permission", ...state.oc.selected, permissionID: permission.id, response, requestID: randomId() }); state.oc.permissions = []; renderContent(); })); messages.append(banner); }
+    const form = document.createElement("div"); form.className = "oc-compose"; const input = document.createElement("textarea"); input.placeholder = "Message OpenCode…"; const sendButton = actionButton("Send", "primary-button", () => { const text = input.value.trim(); if (!text) return; state.oc.messages.push({ info: { id: randomId(), role: "user" }, parts: [{ id: randomId(), type: "text", text }] }); state.oc.busy = true; ocSend({ type: "prompt", ...state.oc.selected, text, requestID: randomId() }); input.value = ""; renderContent(); }); form.append(input, sendButton); if (state.oc.busy) form.append(actionButton("Stop", "danger-button", () => ocSend({ type: "abort", ...state.oc.selected, requestID: randomId() }))); chat.append(messages, form);
+  }
+  root.append(list, chat); return root;
+}
+function renderOpenCodeMessage(message) {
+  const wrap = document.createElement("article"); wrap.className = `oc-message ${message.info?.role === "user" ? "user" : "assistant"}`;
+  for (const part of message.parts || []) {
+    if (["step-start", "step-finish"].includes(part.type)) continue;
+    if (part.type === "tool") { const card = document.createElement("details"); card.className = "oc-tool"; card.innerHTML = `<summary>${ocEscape(part.tool || part.name || "Tool")} <em>${ocEscape(part.state?.status || "pending")}</em></summary><pre>${ocEscape(JSON.stringify(part.state?.input || {}, null, 2))}\n${ocEscape(part.state?.output || part.state?.error || "")}</pre>`; wrap.append(card); }
+    else if (part.type === "reasoning") { const details = document.createElement("details"); details.className = "oc-thinking"; details.innerHTML = `<summary>thinking…</summary><div>${ocMarkdown(part.text || part.content || "")}</div>`; wrap.append(details); }
+    else { const text = document.createElement("div"); text.className = "oc-text"; text.innerHTML = ocMarkdown(part.text || part.content || ""); wrap.append(text); }
+  }
+  return wrap;
 }
 
 /* ---------- panel settings page ---------- */

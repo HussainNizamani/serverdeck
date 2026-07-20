@@ -18,6 +18,13 @@ runtime dependencies ([ssh2](https://www.npmjs.com/package/ssh2),
 
 ## Features
 
+## OpenCode remote sessions
+
+Add an OpenCode machine from the **OpenCode** tab, copy its one-time token into
+`~/.config/opencode/serverdeck-remote.json`, and connect the remote CLI to the
+agent WebSocket. Server Deck stores only a SHA-256 token hash and mirrors live
+sessions, prompts, tool activity, and permission requests in the browser.
+
 - **Server inventory** — groups, tags, notes, status bubbles with health dots,
   and search. Selected server and tab survive page reloads.
 - **Real web terminal** — xterm.js (the terminal VS Code uses) connected to an
