@@ -1123,6 +1123,7 @@ function renderDetails() {
 }
 
 function renderContent() {
+  const ocScroll = state.activeOps === "opencode" ? ocCaptureScroll() : null;
   const settingsVisible = state.activeOps === "settings" || state.draftNew;
   elements.settingsPanel.hidden = !settingsVisible;
   elements.contentPane.hidden = settingsVisible;
@@ -1132,6 +1133,7 @@ function renderContent() {
 
   elements.contentPane.innerHTML = "";
   elements.contentPane.classList.toggle("flush", state.activeOps === "multiterm");
+  elements.contentPane.classList.toggle("oc-flush", state.activeOps === "opencode");
 
   if (state.activeOps === "panel") {
     elements.contentPane.append(renderPanelSettings());
@@ -1147,7 +1149,14 @@ function renderContent() {
     elements.contentPane.append(renderKeyFilesPanel());
     return;
   }
-  if (state.activeOps === "opencode") { elements.contentPane.append(renderOpenCodePanel()); connectOpenCode(); return; }
+  if (state.activeOps === "opencode") {
+    const panel = renderOpenCodePanel();
+    elements.contentPane.append(panel);
+    panel.style.setProperty("--oc-top-offset", `${panel.getBoundingClientRect().top}px`);
+    ocRestoreScroll(ocScroll);
+    connectOpenCode();
+    return;
+  }
 
   const server = selectedServer();
 
@@ -1243,6 +1252,42 @@ function ocSend(message) { if (state.oc.socket?.readyState === WebSocket.OPEN) s
 function ocRelative(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value || 0)) / 1000)); return seconds < 60 ? "now" : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : `${Math.floor(seconds / 3600)}h ago`; }
 function ocEscape(value) { const node = document.createElement("span"); node.textContent = String(value || ""); return node.innerHTML; }
 function ocMarkdown(text) { return ocEscape(text).replace(/```([\s\S]*?)```/g, "<pre>$1</pre>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\n/g, "<br>"); }
+function ocCaptureScroll() {
+  const messages = elements.contentPane.querySelector(".oc-messages");
+  const input = elements.contentPane.querySelector(".oc-compose textarea");
+  if (!messages && !input) return null;
+  return {
+    top: messages ? messages.scrollTop : 0,
+    atBottom: messages ? messages.scrollHeight - messages.clientHeight - messages.scrollTop <= 80 : true,
+    draft: input ? input.value : "",
+    focused: input ? document.activeElement === input : false,
+    selStart: input ? input.selectionStart : 0,
+    selEnd: input ? input.selectionEnd : 0
+  };
+}
+function ocRestoreScroll(scroll) {
+  const messages = elements.contentPane.querySelector(".oc-messages");
+  if (messages) {
+    if (!scroll || scroll.atBottom) messages.scrollTop = messages.scrollHeight;
+    else messages.scrollTop = Math.min(scroll.top, messages.scrollHeight - messages.clientHeight);
+  }
+  const input = elements.contentPane.querySelector(".oc-compose textarea");
+  if (input && scroll && scroll.draft && !input.value) {
+    input.value = scroll.draft;
+    if (scroll.focused) { input.focus(); try { input.setSelectionRange(scroll.selStart, scroll.selEnd); } catch (error) {} }
+  }
+}
+function ocListCollapsed() {
+  try {
+    const saved = localStorage.getItem("oc-list-collapsed");
+    if (saved !== null) return saved === "true";
+  } catch (error) {}
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+function ocSetListCollapsed(collapsed) {
+  try { localStorage.setItem("oc-list-collapsed", String(collapsed)); } catch (error) {}
+  renderContent();
+}
 function connectOpenCode() {
   if (state.oc.socket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(state.oc.socket.readyState)) return;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -1268,8 +1313,10 @@ function applyOpenCodeEvent(event) {
   if (event?.type === "message.part.removed") for (const message of state.oc.messages) message.parts = (message.parts || []).filter(part => part.id !== (properties.part?.id || properties.partID));
 }
 function renderOpenCodePanel() {
-  const root = document.createElement("section"); root.className = "oc-layout";
+  const collapsed = ocListCollapsed();
+  const root = document.createElement("section"); root.className = `oc-layout${collapsed ? " oc-list-collapsed" : ""}`;
   const list = document.createElement("aside"); list.className = "oc-list";
+  const toggle = document.createElement("button"); toggle.className = "oc-list-toggle"; toggle.type = "button"; toggle.textContent = collapsed ? "›" : "‹"; toggle.title = collapsed ? "Show OpenCode sessions" : "Hide OpenCode sessions"; toggle.setAttribute("aria-label", toggle.title); toggle.setAttribute("aria-expanded", String(!collapsed)); toggle.onclick = () => ocSetListCollapsed(!collapsed);
   const add = actionButton("+ Add machine", "secondary-button", async () => {
     const name = window.prompt("Machine name"); if (!name) return;
     try { const machine = await api("/api/opencode/machines", { method: "POST", body: JSON.stringify({ name }) }); window.prompt("Copy this token now. Paste it into ~/.config/opencode/serverdeck-remote.json", machine.token); } catch (error) { showToast(error.message); }
@@ -1288,7 +1335,7 @@ function renderOpenCodePanel() {
     for (const permission of state.oc.permissions) { const banner = document.createElement("div"); banner.className = "oc-permission"; banner.textContent = permission.title || permission.type || "Permission requested"; for (const [label, response] of [["Allow once", "once"], ["Always", "always"], ["Deny", "reject"]]) banner.append(actionButton(label, response === "reject" ? "danger-button" : "secondary-button", () => { ocSend({ type: "permission", ...state.oc.selected, permissionID: permission.id, response, requestID: randomId() }); state.oc.permissions = []; renderContent(); })); messages.append(banner); }
     const form = document.createElement("div"); form.className = "oc-compose"; const input = document.createElement("textarea"); input.placeholder = "Message OpenCode…"; const sendButton = actionButton("Send", "primary-button", () => { const text = input.value.trim(); if (!text) return; state.oc.messages.push({ info: { id: randomId(), role: "user" }, parts: [{ id: randomId(), type: "text", text }] }); state.oc.busy = true; ocSend({ type: "prompt", ...state.oc.selected, text, requestID: randomId() }); input.value = ""; renderContent(); }); form.append(input, sendButton); if (state.oc.busy) form.append(actionButton("Stop", "danger-button", () => ocSend({ type: "abort", ...state.oc.selected, requestID: randomId() }))); chat.append(messages, form);
   }
-  root.append(list, chat); return root;
+  root.append(list, chat, toggle); return root;
 }
 function renderOpenCodeMessage(message) {
   const wrap = document.createElement("article"); wrap.className = `oc-message ${message.info?.role === "user" ? "user" : "assistant"}`;
