@@ -98,6 +98,11 @@ docker compose up --build -d
 Open <http://127.0.0.1:8787>, create your admin account on the first-run
 screen, and add your first server. That's it.
 
+> The panel binds to localhost only by default, so `<server-ip>:8787` won't
+> connect from another machine — this is intentional (it keeps the panel off
+> the public internet). Set `SERVERDECK_TAILSCALE_IP` to reach it over your
+> tailnet — see [Remote access with Tailscale](#remote-access-with-tailscale).
+
 > On some distros Docker requires root: prefix the compose commands with
 > `sudo`, or add your user to the `docker` group
 > (`sudo usermod -aG docker $USER`, then log out and back in).
@@ -139,6 +144,26 @@ docker compose down -v           # ⚠ also DELETES the database volume
    **Set up two-factor**, add the setup key to Google Authenticator (tap **+ →
    Enter a setup key**, account type *time based*), and confirm with a 6-digit
    code. From then on, login requires the code.
+
+### Forgot your password (or lost your 2FA device)
+
+There is no email reset — the panel has no mail server and is reachable only
+over localhost/Tailscale, so the recovery channel is host access (which already
+means ownership: you control the database, keys, and `.env`). Run on the panel
+host, passing the email to set:
+
+```sh
+docker compose exec app node scripts/reset-admin.js email@example.com               # generates a temp password
+docker compose exec app node scripts/reset-admin.js email@example.com yourpassword   # or set one directly
+node scripts/reset-admin.js email@example.com yourpassword                           # bare-metal
+```
+
+(Quote the password only if it contains spaces or shell symbols, e.g. `'my pass!'`.)
+
+It sets the admin account to that email with a new password (a strong temporary
+one is printed if you don't supply one) and clears 2FA and existing sessions —
+log in, then re-enable two-factor in Settings. **Your servers, groups, and SSH
+keys are kept.**
 
 ## Remote access with Tailscale
 

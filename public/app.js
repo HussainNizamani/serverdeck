@@ -195,6 +195,7 @@ const elements = {
   authPasswordConfirm: document.querySelector("#authPasswordConfirm"),
   authTotpRow: document.querySelector("#authTotpRow"),
   authTotp: document.querySelector("#authTotp"),
+  authForgot: document.querySelector("#authForgot"),
   authSubmit: document.querySelector("#authSubmit"),
   authError: document.querySelector("#authError")
 };
@@ -1413,10 +1414,45 @@ function renderImportList() {
   elements.importList.innerHTML = "";
   const items = state.importEntries || [];
 
+  // Groups section: choose which groups to recreate. Servers whose group is
+  // left unchecked still import — just ungrouped.
+  const groupNames = [...new Set(items.map(item => (item.entry.group || "").trim()).filter(Boolean))];
+  if (groupNames.length) {
+    const groupHead = document.createElement("label");
+    groupHead.className = "export-row export-all";
+    const groupHeadText = document.createElement("span");
+    groupHeadText.textContent = `Groups (${groupNames.length})`;
+    const groupHeadBox = document.createElement("input");
+    groupHeadBox.type = "checkbox";
+    groupHeadBox.checked = true;
+    groupHeadBox.addEventListener("change", () => {
+      for (const box of elements.importList.querySelectorAll("input[data-group]")) box.checked = groupHeadBox.checked;
+    });
+    groupHead.append(groupHeadText, groupHeadBox);
+    elements.importList.append(groupHead);
+
+    for (const name of groupNames) {
+      const exists = state.groups.some(group => group.name.toLowerCase() === name.toLowerCase());
+      const row = document.createElement("label");
+      row.className = "export-row";
+      const label = document.createElement("span");
+      label.textContent = name;
+      const meta = document.createElement("span");
+      meta.className = "imp-meta";
+      meta.textContent = exists ? "already exists" : "new";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      box.dataset.group = name;
+      row.append(label, meta, box);
+      elements.importList.append(row);
+    }
+  }
+
   const all = document.createElement("label");
   all.className = "export-row export-all";
   const allText = document.createElement("span");
-  allText.textContent = `Select all (${items.length})`;
+  allText.textContent = `Servers (${items.length})`;
   const allBox = document.createElement("input");
   allBox.type = "checkbox";
   allBox.checked = items.every(item => !item.duplicate);
@@ -1458,9 +1494,28 @@ async function confirmImport() {
     elements.importError.hidden = false;
     return;
   }
+  // Groups the user chose to import (unchecked groups → those servers import
+  // ungrouped). Groups are exported by name, so recreate any the target
+  // instance lacks before attaching servers.
+  const allowedGroups = new Set(
+    [...elements.importList.querySelectorAll("input[data-group]:checked")].map(box => box.dataset.group.toLowerCase())
+  );
+  const groupIdByName = new Map(state.groups.map(g => [g.name.toLowerCase(), g.id]));
+  for (const name of new Set(picked.map(p => (p.entry.group || "").trim()).filter(Boolean))) {
+    const key = name.toLowerCase();
+    if (!allowedGroups.has(key) || groupIdByName.has(key)) continue;
+    try {
+      const { group } = await api("/api/groups", { method: "POST", body: JSON.stringify({ name }) });
+      groupIdByName.set(group.name.toLowerCase(), group.id);
+    } catch {
+      // group may already exist (race/case clash); the lookup below just falls back to ungrouped
+    }
+  }
+
   let imported = 0;
   for (const { entry } of picked) {
-    const groupId = state.groups.find(group => group.name === entry.group)?.id || "";
+    const key = (entry.group || "").trim().toLowerCase();
+    const groupId = allowedGroups.has(key) ? (groupIdByName.get(key) || "") : "";
     try {
       await api("/api/servers", {
         method: "POST",
@@ -1540,22 +1595,51 @@ function renderExportList() {
   allBox.type = "checkbox";
   allBox.checked = true;
   allBox.addEventListener("change", () => {
-    for (const box of elements.exportList.querySelectorAll("input[data-server]")) box.checked = allBox.checked;
+    for (const box of elements.exportList.querySelectorAll("input[data-server], input[data-group-box]")) {
+      box.checked = allBox.checked;
+      box.indeterminate = false;
+    }
   });
   all.append(allText, allBox);
   elements.exportList.append(all);
 
-  for (const server of state.servers) {
-    const row = document.createElement("label");
-    row.className = "export-row";
-    const text = document.createElement("span");
-    text.textContent = server.name;
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = true;
-    box.dataset.server = server.id;
-    row.append(text, box);
-    elements.exportList.append(row);
+  // Grouped: a group header (ticking it ticks all its servers) with the group's
+  // servers nested beneath it, each shown as "name (host)".
+  for (const section of groupedServers(state.servers)) {
+    const header = document.createElement("label");
+    header.className = "export-row export-group";
+    const headText = document.createElement("span");
+    headText.textContent = section.name;
+    const headBox = document.createElement("input");
+    headBox.type = "checkbox";
+    headBox.checked = true;
+    headBox.dataset.groupBox = section.id || "ungrouped";
+    header.append(headText, headBox);
+    elements.exportList.append(header);
+
+    const serverBoxes = [];
+    for (const server of section.servers) {
+      const row = document.createElement("label");
+      row.className = "export-row export-child";
+      const text = document.createElement("span");
+      text.textContent = `${server.name} (${server.host})`;
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      box.dataset.server = server.id;
+      box.addEventListener("change", () => {
+        headBox.checked = serverBoxes.every(other => other.checked);
+        headBox.indeterminate = !headBox.checked && serverBoxes.some(other => other.checked);
+      });
+      serverBoxes.push(box);
+      row.append(text, box);
+      elements.exportList.append(row);
+    }
+
+    headBox.addEventListener("change", () => {
+      headBox.indeterminate = false;
+      for (const box of serverBoxes) box.checked = headBox.checked;
+    });
   }
 }
 
@@ -2579,6 +2663,8 @@ function showAuthOverlay(mode, options = {}) {
   elements.authPasswordConfirm.required = setup;
   elements.authPassword.autocomplete = setup ? "new-password" : "current-password";
   elements.authTotpRow.hidden = !options.totpRequired;
+  elements.authForgot.hidden = setup; // recovery hint only matters once an account exists
+  if (!setup) elements.authForgot.open = false;
   elements.authError.hidden = !options.error;
   elements.authError.textContent = options.error || "";
   elements.authOverlay.dataset.mode = mode;
